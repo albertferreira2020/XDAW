@@ -1,6 +1,7 @@
 //! XDAW desktop application.
 
 mod app;
+mod arr_strip;
 mod arrangement;
 mod arrec;
 mod browser;

@@ -2,6 +2,7 @@
 
 use crate::app::{ClipLoc, Detail, XdawApp};
 use crate::browser::{self, BrowserItem};
+use crate::arr_strip;
 use crate::theme;
 use crate::timeline::{self, HView};
 use egui::{pos2, vec2, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Ui};
@@ -11,7 +12,13 @@ use xdaw_project::*;
 use xdaw_sequencer::Beats;
 
 const HEADER_W: f32 = 150.0;
-const RULER_H: f32 = 34.0;
+const RULER_H: f32 = 46.0;
+const TIME_H: f32 = 12.0;
+const FOLD_H: f32 = 22.0;
+
+fn ruler_h(app: &XdawApp) -> f32 {
+    RULER_H + if app.arr.time_ruler { TIME_H } else { 0.0 }
+}
 const EDGE: f32 = 6.0;
 
 pub struct ArrangementState {
@@ -26,11 +33,45 @@ pub struct ArrangementState {
     /// The view moved this frame because of Follow or zoom, not a manual scroll.
     following: bool,
     drag: Option<Drag>,
+    /// Mixer column beside the lanes.
+    pub show_mixer: bool,
+    /// Second ruler in minutes:seconds.
+    pub time_ruler: bool,
+    /// Range being dragged on a take lane `(track, lane, anchor)`.
+    comp_drag: Option<(usize, usize, Beats)>,
+    /// Drawing tool for automation lanes and clip envelopes.
+    pub tool: Tool,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum Tool {
+    /// Click to add points, drag to move them.
+    #[default]
+    Select,
+    /// Pencil: paint stair steps on the grid.
+    Draw,
+    /// Drag a straight ramp between two points.
+    Line,
+    /// Drag over points to delete them.
+    Erase,
+}
+
+impl Tool {
+    pub const ALL: [Tool; 4] = [Tool::Select, Tool::Draw, Tool::Line, Tool::Erase];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Tool::Select => "Select",
+            Tool::Draw => "Draw",
+            Tool::Line => "Line",
+            Tool::Erase => "Erase",
+        }
+    }
 }
 
 impl Default for ArrangementState {
     fn default() -> Self {
-        Self { view: HView::new(18.0, 0.5, 600.0), snap: 1.0, cursor: 0.0, lane_h: 56.0, lane: HashMap::new(), width: 800.0, following: false, drag: None }
+        Self { view: HView::new(18.0, 0.5, 600.0), snap: 1.0, cursor: 0.0, lane_h: 56.0, lane: HashMap::new(), width: 800.0, following: false, drag: None, show_mixer: true, time_ruler: true, comp_drag: None, tool: Tool::Select }
     }
 }
 
@@ -60,8 +101,22 @@ impl ArrangementState {
         self.view.beat(rect, x)
     }
 
+    /// Grid step in beats: the chosen value, or (Auto) the finest power-of-two
+    /// division that keeps lines at least 12 px apart.
+    pub fn grid_step(&self) -> f64 {
+        if self.snap >= 0.0 {
+            return self.snap;
+        }
+        let mut step = 1.0 / 16.0;
+        while (step * self.view.px_per_beat as f64) < 12.0 && step < 64.0 {
+            step *= 2.0;
+        }
+        step
+    }
+
     fn snap(&self, b: Beats, bypass: bool) -> Beats {
-        if self.snap <= 0.0 || bypass { b } else { (b / self.snap).round() * self.snap }
+        let step = self.grid_step();
+        if step <= 0.0 || bypass { b } else { (b / step).round() * step }
     }
 }
 
@@ -134,11 +189,11 @@ pub fn target_name(p: &Project, r: TrackRef, target: ParamTarget) -> String {
 }
 
 pub fn show(app: &mut XdawApp, ui: &mut Ui) {
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.label("Snap");
         egui::ComboBox::from_id_salt("snap").width(70.0).selected_text(snap_label(app.arr.snap)).show_ui(ui, |ui| {
-            for s in [0.0, 0.125, 0.25, 0.5, 1.0, 2.0, 4.0] {
-                ui.selectable_value(&mut app.arr.snap, s, snap_label(s));
+            for (v, l) in SNAPS {
+                ui.selectable_value(&mut app.arr.snap, *v, *l);
             }
         });
         ui.separator();
@@ -170,42 +225,74 @@ pub fn show(app: &mut XdawApp, ui: &mut Ui) {
             split_selected(app);
         }
         ui.checkbox(&mut app.follow, "Follow");
+        ui.separator();
+        ui.checkbox(&mut app.arr.show_mixer, "Mixer").on_hover_text("Mixer column beside the tracks");
+        ui.checkbox(&mut app.arr.time_ruler, "Time").on_hover_text("Second ruler in minutes:seconds");
+        ui.separator();
+        ui.label("Draw");
+        for t in Tool::ALL {
+            ui.selectable_value(&mut app.arr.tool, t, t.label()).on_hover_text(match t {
+                Tool::Select => "Automation: Cmd/double-click adds a point, drag moves it",
+                Tool::Draw => "Automation: paint steps on the grid",
+                Tool::Line => "Automation: drag a straight ramp",
+                Tool::Erase => "Automation: drag over points to delete them",
+            });
+        }
+        if ui.small_button("+ Locator").on_hover_text("Add a locator at the insert marker (L)").clicked() {
+            add_locator(app);
+        }
     });
     let before = app.arr.view;
-    let rows = app.project.tracks.len();
-    let total_h = RULER_H + rows as f32 * app.arr.lane_h + DROP_H + 8.0;
+    let (rows, rows_h) = layout(app);
+    let rh = ruler_h(app);
+    let total_h = rh + rows_h + DROP_H + 8.0;
     let left = ui.max_rect().left();
     let area_h = (ui.available_height() - timeline::SCROLLBAR_H - 4.0).max(60.0);
+    let strip_w = if app.arr.show_mixer { arr_strip::STRIP_W } else { 0.0 };
     egui::ScrollArea::vertical().id_salt("arr_scroll").max_height(area_h).auto_shrink([false, false]).show(ui, |ui| {
         let width = ui.available_width();
         let (outer, resp) = ui.allocate_exact_size(vec2(width, total_h.max(area_h)), Sense::click_and_drag());
-        let timeline = Rect::from_min_max(pos2(outer.left() + HEADER_W, outer.top()), outer.max);
+        let timeline = Rect::from_min_max(pos2(outer.left() + HEADER_W, outer.top()), pos2(outer.right() - strip_w, outer.bottom()));
         app.arr.width = timeline.width();
         handle_wheel(app, ui, &resp, timeline);
         follow_playhead(app, timeline);
         draw_ruler(app, ui, timeline);
-        for t in 0..rows {
-            let top = outer.top() + RULER_H + t as f32 * app.arr.lane_h;
-            let header = Rect::from_min_size(pos2(outer.left(), top), vec2(HEADER_W, app.arr.lane_h));
-            let lane = Rect::from_min_max(pos2(timeline.left(), top), pos2(timeline.right(), top + app.arr.lane_h));
-            track_header(app, ui, t, header);
-            track_lane(app, ui, t, lane);
+        for row in &rows {
+            let top = outer.top() + rh + row.top;
+            let header = Rect::from_min_size(pos2(outer.left(), top), vec2(HEADER_W, row.h));
+            let lane = Rect::from_min_max(pos2(timeline.left(), top), pos2(timeline.right(), top + row.h));
+            match row.kind {
+                RowKind::Main => {
+                    track_header(app, ui, row.t, header);
+                    track_lane(app, ui, row.t, lane);
+                    if strip_w > 0.0 {
+                        arr_strip::cell(app, ui, row.t, Rect::from_min_max(pos2(timeline.right(), top), pos2(outer.right(), top + row.h)));
+                    }
+                }
+                RowKind::Take(li) => {
+                    take_header(app, ui, row.t, li, header);
+                    take_lane(app, ui, row.t, li, lane);
+                }
+            }
         }
-        let drop_top = outer.top() + RULER_H + rows as f32 * app.arr.lane_h + 4.0;
+        let drop_top = outer.top() + rh + rows_h + 4.0;
         drop_zone(app, ui, Rect::from_min_max(pos2(outer.left(), drop_top), pos2(timeline.right(), drop_top + DROP_H)), timeline);
         // Playhead and insert marker over everything.
         let p = ui.painter_at(timeline);
         let x = app.arr.x(timeline, app.beat());
         p.line_segment([pos2(x, timeline.top()), pos2(x, timeline.bottom())], Stroke::new(1.5, theme::ACCENT));
         let cx = app.arr.x(timeline, app.arr.cursor);
-        p.line_segment([pos2(cx, timeline.top() + RULER_H), pos2(cx, timeline.bottom())], Stroke::new(1.0, Color32::from_white_alpha(90)));
+        p.line_segment([pos2(cx, timeline.top() + rh), pos2(cx, timeline.bottom())], Stroke::new(1.0, Color32::from_white_alpha(90)));
         if ui.input(|i| i.pointer.any_released()) {
             app.arr.drag = None;
+            app.arr.comp_drag = None;
         }
     });
     let content = content_end(app) + 8.0 * app.project.transport.time_signature.bar_beats();
     let width = app.arr.width;
-    timeline::scrollbar_row(ui, "arr", &mut app.arr.view, left + HEADER_W, width, content);
+    let bar = Rect::from_min_size(pos2(left + HEADER_W, ui.cursor().top()), vec2(width, timeline::SCROLLBAR_H));
+    ui.allocate_rect(Rect::from_min_size(pos2(left, bar.top()), vec2(ui.available_width(), timeline::SCROLLBAR_H)), Sense::hover());
+    timeline::scrollbar(ui, bar, "arr", &mut app.arr.view, width, content);
     // Scrolling by hand while playing stops Follow, as in Live.
     let v = app.arr.view;
     if app.playing() && app.follow && v.px_per_beat == before.px_per_beat && v.scroll_beats != before.scroll_beats && !app.arr.following {
@@ -213,6 +300,89 @@ pub fn show(app: &mut XdawApp, ui: &mut Ui) {
     }
     app.arr.following = false;
 }
+
+#[derive(Clone, Copy, PartialEq, Debug)]
+enum RowKind {
+    Main,
+    Take(usize),
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Row {
+    t: usize,
+    kind: RowKind,
+    top: f32,
+    h: f32,
+}
+
+/// True when an ancestor group of track `t` is folded.
+fn hidden(app: &XdawApp, t: usize) -> bool {
+    let mut cur = app.project.tracks[t].group;
+    for _ in 0..8 {
+        let Some(g) = cur else { return false };
+        let Some(gt) = app.project.tracks.iter().find(|x| x.id == g) else { return false };
+        if gt.folded {
+            return true;
+        }
+        cur = gt.group;
+    }
+    false
+}
+
+/// Nesting depth of a track (number of ancestor groups).
+fn depth(app: &XdawApp, t: usize) -> usize {
+    let mut d = 0;
+    let mut cur = app.project.tracks[t].group;
+    while let Some(g) = cur {
+        let Some(gt) = app.project.tracks.iter().find(|x| x.id == g) else { break };
+        d += 1;
+        cur = gt.group;
+        if d >= 8 {
+            break;
+        }
+    }
+    d
+}
+
+fn take_h(app: &XdawApp) -> f32 {
+    (app.arr.lane_h * 0.6).max(28.0)
+}
+
+/// Visible rows (folded groups hide their members; take lanes follow their track).
+fn layout(app: &XdawApp) -> (Vec<Row>, f32) {
+    let mut rows = vec![];
+    let mut y = 0.0;
+    for (t, tr) in app.project.tracks.iter().enumerate() {
+        if hidden(app, t) {
+            continue;
+        }
+        let h = if tr.folded { FOLD_H } else { app.arr.lane_h };
+        rows.push(Row { t, kind: RowKind::Main, top: y, h });
+        y += h;
+        if tr.show_takes && !tr.folded {
+            for li in (0..tr.take_lanes.len()).rev() {
+                let h = take_h(app);
+                rows.push(Row { t, kind: RowKind::Take(li), top: y, h });
+                y += h;
+            }
+        }
+    }
+    (rows, y)
+}
+
+const SNAPS: &[(f64, &str)] = &[
+    (-1.0, "Auto"),
+    (0.0, "Off"),
+    (4.0, "1 Bar"),
+    (2.0, "1/2"),
+    (1.0, "1/4"),
+    (2.0 / 3.0, "1/4T"),
+    (0.5, "1/8"),
+    (1.0 / 3.0, "1/8T"),
+    (0.25, "1/16"),
+    (1.0 / 6.0, "1/16T"),
+    (0.125, "1/32"),
+];
 
 const DROP_H: f32 = 48.0;
 const LANE_MIN: f32 = 24.0;
@@ -257,15 +427,7 @@ pub fn zoom_to_selection(app: &mut XdawApp) {
 }
 
 fn snap_label(s: f64) -> String {
-    match s {
-        x if x <= 0.0 => "Off".into(),
-        x if x >= 4.0 => "1 Bar".into(),
-        x if x >= 2.0 => "1/2".into(),
-        x if x >= 1.0 => "1/4".into(),
-        x if x >= 0.5 => "1/8".into(),
-        x if x >= 0.25 => "1/16".into(),
-        _ => "1/32".into(),
-    }
+    SNAPS.iter().find(|(v, _)| (*v - s).abs() < 1e-9).map(|(_, l)| l.to_string()).unwrap_or_else(|| format!("{s:.3}"))
 }
 
 fn handle_wheel(app: &mut XdawApp, ui: &mut Ui, resp: &egui::Response, timeline: Rect) {
@@ -295,10 +457,18 @@ fn follow_playhead(app: &mut XdawApp, timeline: Rect) {
     }
 }
 
+pub fn add_locator(app: &mut XdawApp) {
+    let beat = app.arr.cursor.max(0.0);
+    app.project.add_locator(beat);
+    app.label("Add Locator");
+}
+
 fn draw_ruler(app: &mut XdawApp, ui: &mut Ui, timeline: Rect) {
-    let rect = Rect::from_min_size(timeline.min, vec2(timeline.width(), RULER_H));
+    let rect = Rect::from_min_size(timeline.min, vec2(timeline.width(), ruler_h(app)));
     let loop_rect = Rect::from_min_size(rect.min, vec2(rect.width(), 12.0));
-    let resp = ui.interact(rect, ui.id().with("ruler"), Sense::click_and_drag());
+    let loc_rect = Rect::from_min_size(pos2(rect.left(), rect.top() + 34.0), vec2(rect.width(), 12.0));
+    let resp = ui.interact(Rect::from_min_size(rect.min, vec2(rect.width(), 34.0)), ui.id().with("ruler"), Sense::click_and_drag());
+    let strip = ui.interact(loc_rect, ui.id().with("locator_strip"), Sense::click());
     let p = ui.painter_at(rect);
     p.rect_filled(rect, 0.0, theme::PANEL_DARK);
     let sig = app.project.transport.time_signature;
@@ -310,14 +480,31 @@ fn draw_ruler(app: &mut XdawApp, ui: &mut Ui, timeline: Rect) {
     for k in first..=last {
         let b = k as f64 * bar * step_bars;
         let x = app.arr.x(timeline, b);
-        p.line_segment([pos2(x, rect.top() + 14.0), pos2(x, rect.bottom())], Stroke::new(1.0, theme::GRID));
+        p.line_segment([pos2(x, rect.top() + 14.0), pos2(x, rect.top() + 34.0)], Stroke::new(1.0, theme::GRID));
         p.text(pos2(x + 3.0, rect.top() + 14.0), Align2::LEFT_TOP, format!("{}", (b / bar) as i64 + 1), FontId::proportional(10.0), theme::TEXT_DIM);
+    }
+    // Beat ticks once zoomed in enough.
+    if app.arr.view.px_per_beat >= 14.0 {
+        let b0 = app.arr.view.scroll_beats.floor() as i64;
+        for b in b0..=b0 + visible.ceil() as i64 + 1 {
+            let x = app.arr.x(timeline, b as f64);
+            p.line_segment([pos2(x, rect.top() + 28.0), pos2(x, rect.top() + 34.0)], Stroke::new(1.0, theme::GRID));
+        }
     }
     // Loop brace.
     let t = &app.project.transport;
     let (lx0, lx1) = (app.arr.x(timeline, t.loop_start), app.arr.x(timeline, t.loop_start + t.loop_length));
     let brace = Rect::from_min_max(pos2(lx0, loop_rect.top() + 2.0), pos2(lx1, loop_rect.bottom()));
     p.rect_filled(brace, 2.0, if t.loop_enabled { theme::QUEUED.linear_multiply(0.8) } else { theme::GRID });
+    if t.punch_in || t.punch_out {
+        let c = theme::RECORD;
+        if t.punch_in {
+            p.line_segment([pos2(lx0, loop_rect.top()), pos2(lx0, rect.top() + 34.0)], Stroke::new(2.0, c));
+        }
+        if t.punch_out {
+            p.line_segment([pos2(lx1, loop_rect.top()), pos2(lx1, rect.top() + 34.0)], Stroke::new(2.0, c));
+        }
+    }
     let alt = ui.input(|i| i.modifiers.alt);
     if let Some(pos) = resp.interact_pointer_pos() {
         let beat = app.arr.snap(app.arr.beat(timeline, pos.x), alt).max(0.0);
@@ -348,6 +535,97 @@ fn draw_ruler(app: &mut XdawApp, ui: &mut Ui, timeline: Rect) {
     if resp.double_clicked() && resp.interact_pointer_pos().is_some_and(|p| p.y < loop_rect.bottom()) {
         app.project.transport.loop_enabled = !app.project.transport.loop_enabled;
     }
+
+    // Locators.
+    p.rect_filled(loc_rect, 0.0, theme::dim(theme::PANEL_DARK, 0.85));
+    if strip.double_clicked() {
+        if let Some(pos) = strip.interact_pointer_pos() {
+            app.arr.cursor = app.arr.snap(app.arr.beat(timeline, pos.x), alt).max(0.0);
+            add_locator(app);
+        }
+    }
+    let mut moved: Option<(Id, Beats)> = None;
+    let mut goto: Option<Beats> = None;
+    let mut remove: Option<Id> = None;
+    let mut rename: Option<(Id, String)> = None;
+    let locators: Vec<Locator> = app.project.locators.clone();
+    for l in &locators {
+        let x = app.arr.x(timeline, l.beat);
+        let w = (l.name.chars().count() as f32 * 5.6 + 10.0).min(160.0);
+        let flag = Rect::from_min_size(pos2(x, loc_rect.top()), vec2(w, loc_rect.height())).intersect(loc_rect.expand2(vec2(200.0, 0.0)));
+        if x + w < rect.left() || x > rect.right() {
+            continue;
+        }
+        let fr = ui.interact(flag, ui.id().with(("locator", l.id)), Sense::click_and_drag());
+        let col = if fr.hovered() { theme::ACCENT } else { theme::dim(theme::ACCENT, 0.7) };
+        let pp = p.with_clip_rect(rect);
+        pp.line_segment([pos2(x, loc_rect.top()), pos2(x, rect.bottom())], Stroke::new(1.0, col));
+        pp.rect_filled(flag, 1.0, col);
+        pp.text(pos2(x + 4.0, flag.center().y), Align2::LEFT_CENTER, &l.name, FontId::proportional(9.5), Color32::BLACK);
+        if fr.clicked() {
+            goto = Some(l.beat);
+        }
+        if fr.dragged() {
+            if let Some(pos) = fr.interact_pointer_pos() {
+                moved = Some((l.id, app.arr.snap(app.arr.beat(timeline, pos.x), alt).max(0.0)));
+            }
+        }
+        fr.context_menu(|ui| {
+            let mut name = l.name.clone();
+            if ui.text_edit_singleline(&mut name).changed() {
+                rename = Some((l.id, name));
+            }
+            if ui.button("Delete locator").clicked() {
+                remove = Some(l.id);
+                ui.close();
+            }
+        });
+    }
+    if let Some(b) = goto {
+        app.arr.cursor = b;
+        app.rt.send(Command::Locate(b));
+    }
+    if let Some((id, b)) = moved {
+        if let Some(l) = app.project.locators.iter_mut().find(|l| l.id == id) {
+            l.beat = b;
+        }
+        app.project.locators.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+        app.label("Move Locator");
+    }
+    if let Some((id, name)) = rename {
+        if let Some(l) = app.project.locators.iter_mut().find(|l| l.id == id) {
+            l.name = name;
+        }
+        app.label("Rename Locator");
+    }
+    if let Some(id) = remove {
+        app.project.remove_locator(id);
+        app.label("Delete Locator");
+    }
+
+    // Time ruler (minutes:seconds).
+    if app.arr.time_ruler {
+        let tr = Rect::from_min_size(pos2(rect.left(), rect.top() + 46.0), vec2(rect.width(), TIME_H));
+        p.rect_filled(tr, 0.0, theme::dim(theme::PANEL_DARK, 0.7));
+        let sec_per_beat = 60.0 / app.project.transport.bpm;
+        let ppsec = app.arr.view.px_per_beat as f64 / sec_per_beat;
+        let step = [1.0, 2.0, 5.0, 10.0, 15.0, 30.0, 60.0, 120.0, 300.0, 600.0].into_iter().find(|s| s * ppsec >= 60.0).unwrap_or(1200.0);
+        let t0 = app.arr.view.scroll_beats * sec_per_beat;
+        let t1 = t0 + visible * sec_per_beat;
+        let mut k = (t0 / step).floor() as i64;
+        while (k as f64) * step <= t1 + step {
+            let secs = k as f64 * step;
+            let x = app.arr.x(timeline, secs / sec_per_beat);
+            p.line_segment([pos2(x, tr.top()), pos2(x, tr.bottom())], Stroke::new(1.0, theme::GRID));
+            p.text(pos2(x + 3.0, tr.center().y), Align2::LEFT_CENTER, format_time(secs), FontId::proportional(9.5), theme::TEXT_DIM);
+            k += 1;
+        }
+    }
+}
+
+fn format_time(secs: f64) -> String {
+    let s = secs.max(0.0).round() as u64;
+    format!("{}:{:02}", s / 60, s % 60)
 }
 
 fn track_header(app: &mut XdawApp, ui: &mut Ui, t: usize, rect: Rect) {
@@ -356,11 +634,48 @@ fn track_header(app: &mut XdawApp, ui: &mut Ui, t: usize, rect: Rect) {
     let track = &app.project.tracks[t];
     let selected = app.sel.track == Some(r);
     let p = ui.painter_at(rect);
+    let indent = depth(app, t) as f32 * 8.0;
     p.rect_filled(rect.shrink(0.5), 0.0, if selected { theme::dim(theme::rgb(track.color), 0.8) } else { theme::dim(theme::rgb(track.color), 0.45) });
-    p.text(rect.left_top() + vec2(5.0, 4.0), Align2::LEFT_TOP, &track.name, FontId::proportional(11.5), theme::TEXT);
+    if indent > 0.0 {
+        p.rect_filled(Rect::from_min_size(rect.min, vec2(indent, rect.height())), 0.0, theme::dim(theme::rgb(track.color), 0.25));
+    }
+    let name = if track.kind == TrackKind::Group { format!("[{}]", track.name) } else { track.name.clone() };
+    p.text(rect.left_top() + vec2(5.0 + indent, 4.0), Align2::LEFT_TOP, name, FontId::proportional(11.5), theme::TEXT);
     let id = track.id;
+    let (folded, has_takes, shows_takes, frozen) = (track.folded, !track.take_lanes.is_empty(), track.show_takes, track.frozen.is_some());
+    // Fold arrow, take-lane toggle and freeze badge, right-aligned in the title line.
+    let mut bx = rect.right() - 12.0;
+    let fold_rect = Rect::from_center_size(pos2(bx, rect.top() + 11.0), vec2(14.0, 14.0));
+    let fold = ui.interact(fold_rect, ui.id().with(("fold", t)), Sense::click()).on_hover_text("Fold track (groups hide their members)");
+    p.text(fold_rect.center(), Align2::CENTER_CENTER, if folded { "▸" } else { "▾" }, FontId::proportional(12.0), theme::TEXT);
+    if fold.clicked() {
+        app.project.tracks[t].folded = !folded;
+        app.label("Fold Track");
+    }
+    if has_takes {
+        bx -= 16.0;
+        let tr = Rect::from_center_size(pos2(bx, rect.top() + 11.0), vec2(14.0, 14.0));
+        let tk = ui.interact(tr, ui.id().with(("takes", t)), Sense::click()).on_hover_text("Show take lanes");
+        p.rect_filled(tr, 2.0, if shows_takes { theme::RECORD } else { theme::SLOT });
+        p.text(tr.center(), Align2::CENTER_CENTER, "T", FontId::proportional(10.0), if shows_takes { Color32::BLACK } else { theme::TEXT });
+        if tk.clicked() {
+            app.project.tracks[t].show_takes = !shows_takes;
+            app.label("Show Takes");
+        }
+    }
+    if frozen {
+        bx -= 16.0;
+        let fr = Rect::from_center_size(pos2(bx, rect.top() + 11.0), vec2(14.0, 14.0));
+        p.rect_filled(fr, 2.0, theme::ACCENT);
+        p.text(fr.center(), Align2::CENTER_CENTER, "F", FontId::proportional(10.0), Color32::BLACK);
+        ui.interact(fr, ui.id().with(("frozen", t)), Sense::hover()).on_hover_text("Frozen: devices are rendered to audio");
+    }
     if resp.clicked() {
         app.select_track(r);
+    }
+    track_menu(app, &resp, t);
+    if rect.height() < 44.0 {
+        return;
     }
     let track = &app.project.tracks[t];
     // Automation lane chooser.
@@ -639,6 +954,108 @@ fn track_lane(app: &mut XdawApp, ui: &mut Ui, t: usize, lane: Rect) {
                 app.label("Clear Automation");
                 ui.close();
             }
+        }
+    });
+}
+
+/// Header of a take lane: its name and a delete button.
+fn take_header(app: &mut XdawApp, ui: &mut Ui, t: usize, li: usize, rect: Rect) {
+    let Some(lane) = app.project.tracks[t].take_lanes.get(li) else { return };
+    let color = theme::rgb(app.project.tracks[t].color);
+    let p = ui.painter_at(rect);
+    p.rect_filled(rect.shrink(0.5), 0.0, theme::dim(color, 0.3));
+    p.text(rect.left_center() + vec2(14.0, 0.0), Align2::LEFT_CENTER, &lane.name, FontId::proportional(10.0), theme::TEXT);
+    let x_rect = Rect::from_center_size(pos2(rect.right() - 12.0, rect.center().y), vec2(14.0, 14.0));
+    let del = ui.interact(x_rect, ui.id().with(("take_del", t, li)), Sense::click()).on_hover_text("Delete this take");
+    p.text(x_rect.center(), Align2::CENTER_CENTER, "×", FontId::proportional(13.0), if del.hovered() { theme::RECORD } else { theme::TEXT_DIM });
+    if del.clicked() {
+        app.project.tracks[t].remove_take_lane(li);
+        app.label("Delete Take");
+    }
+}
+
+/// A take lane: drag across it to make that range the comp (click a clip for its whole range).
+fn take_lane(app: &mut XdawApp, ui: &mut Ui, t: usize, li: usize, lane: Rect) {
+    let Some(tl) = app.project.tracks[t].take_lanes.get(li).cloned() else { return };
+    let resp = ui.interact(lane, ui.id().with(("take_lane", t, li)), Sense::click_and_drag());
+    let painter = ui.painter_at(lane);
+    painter.rect_filled(lane, 0.0, theme::dim(theme::BG, 0.8));
+    painter.line_segment([lane.left_bottom(), lane.right_bottom()], Stroke::new(1.0, theme::PANEL_DARK));
+    let comp = app.project.tracks[t].arrangement.clone();
+    for c in &tl.clips {
+        let (x0, x1) = (app.arr.x(lane, c.start), app.arr.x(lane, c.end()));
+        if x1 < lane.left() || x0 > lane.right() {
+            continue;
+        }
+        let rect = Rect::from_min_max(pos2(x0, lane.top() + 2.0), pos2(x1, lane.bottom() - 2.0));
+        draw_clip(app, &painter, c, rect);
+        // Mark the parts of this take that currently play.
+        for k in comp.iter().filter(|k| k.clip.id == c.clip.id && k.start < c.end() && k.end() > c.start) {
+            let (a, b) = (app.arr.x(lane, k.start.max(c.start)), app.arr.x(lane, k.end().min(c.end())));
+            painter.rect_stroke(Rect::from_min_max(pos2(a, rect.top()), pos2(b, rect.bottom())), 2.0, Stroke::new(1.5, theme::ACCENT), StrokeKind::Inside);
+        }
+    }
+    let alt = ui.input(|i| i.modifiers.alt);
+    let pointer_beat = resp.interact_pointer_pos().or(resp.hover_pos()).map(|p| app.arr.snap(app.arr.beat(lane, p.x), alt).max(0.0));
+    if resp.drag_started() {
+        if let Some(b) = pointer_beat {
+            app.arr.comp_drag = Some((t, li, b));
+        }
+    }
+    if let (Some((ct, cl, anchor)), Some(b)) = (app.arr.comp_drag, pointer_beat) {
+        if (ct, cl) == (t, li) {
+            let (x0, x1) = (app.arr.x(lane, anchor.min(b)), app.arr.x(lane, anchor.max(b)));
+            painter.rect_filled(Rect::from_min_max(pos2(x0, lane.top()), pos2(x1, lane.bottom())), 0.0, theme::ACCENT.linear_multiply(0.25));
+            if resp.drag_stopped() {
+                comp_range(app, t, li, anchor.min(b), anchor.max(b));
+            }
+        }
+    }
+    if resp.clicked() {
+        if let Some(b) = pointer_beat {
+            if let Some(c) = tl.clips.iter().find(|c| c.start <= b && b < c.end()) {
+                comp_range(app, t, li, c.start, c.end());
+            }
+        }
+    }
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::Crosshair);
+    }
+}
+
+/// Makes `[from, to)` of take lane `li` the active comp.
+pub fn comp_range(app: &mut XdawApp, t: usize, li: usize, from: Beats, to: Beats) {
+    if to - from < 1.0 / 64.0 {
+        return;
+    }
+    let mut next = app.project.next_id;
+    let ok = app.project.tracks[t].comp_from_take(li, from, to, || {
+        next += 1;
+        next - 1
+    });
+    app.project.next_id = next;
+    if ok {
+        app.label("Comp Take");
+    }
+}
+
+/// Track-level edit commands (right-click on the header).
+fn track_menu(app: &mut XdawApp, resp: &egui::Response, t: usize) {
+    resp.context_menu(|ui| {
+        let tr = &app.project.tracks[t];
+        let name = tr.name.clone();
+        ui.label(egui::RichText::new(name).strong());
+        ui.separator();
+        if ui.button(if tr.folded { "Unfold" } else { "Fold" }).clicked() {
+            app.project.tracks[t].folded = !app.project.tracks[t].folded;
+            app.label("Fold Track");
+            ui.close();
+        }
+        if !app.project.tracks[t].take_lanes.is_empty() && ui.button("Delete all takes").clicked() {
+            app.project.tracks[t].take_lanes.clear();
+            app.project.tracks[t].show_takes = false;
+            app.label("Delete Takes");
+            ui.close();
         }
     });
 }
