@@ -301,6 +301,34 @@ impl Script {
                     );
                 }
                 "tempo" => app.project.transport.bpm = num(0),
+                // autolane TRACK volume|pan|none: automation lane shown on a track
+                "autolane" => {
+                    if let Some(t) = app.project.tracks.get(num(0) as usize) {
+                        let id = t.id;
+                        match args.get(1).copied() {
+                            Some("volume") => app.arr.lane.insert(id, xdaw_project::ParamTarget::Volume),
+                            Some("pan") => app.arr.lane.insert(id, xdaw_project::ParamTarget::Pan),
+                            _ => app.arr.lane.remove(&id),
+                        };
+                    }
+                }
+                // tool select|draw|line|erase
+                "tool" => {
+                    app.arr.tool = match args.first().copied() {
+                        Some("draw") => crate::arrangement::Tool::Draw,
+                        Some("line") => crate::arrangement::Tool::Line,
+                        Some("erase") => crate::arrangement::Tool::Erase,
+                        _ => crate::arrangement::Tool::Select,
+                    };
+                }
+                // autopoints TRACK volume|pan: print the lane's points
+                "autopoints" => {
+                    if let Some(t) = app.project.tracks.get(num(0) as usize) {
+                        let target = if args.get(1) == Some(&"pan") { xdaw_project::ParamTarget::Pan } else { xdaw_project::ParamTarget::Volume };
+                        let pts: Vec<String> = t.lane(target).map(|l| l.points.iter().map(|p| format!("{:.2}:{:.1}", p.beat, p.value)).collect()).unwrap_or_default();
+                        println!("[script] autopoints n={} {:?}", pts.len(), pts);
+                    }
+                }
                 // note TRACK PITCH VELOCITY on|off: live note to a track (as a keyboard would send).
                 "note" => {
                     let kind = if args.get(3) == Some(&"off") {

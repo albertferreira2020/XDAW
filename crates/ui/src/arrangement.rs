@@ -84,6 +84,8 @@ enum DragKind {
     FadeOut { track: usize, id: Id },
     Point { track: usize, target: ParamTarget, index: usize },
     Loop { anchor: Beats },
+    /// Automation drawing: pencil, line or eraser over a lane.
+    Draw { track: usize, target: ParamTarget, tool: Tool, anchor: Beats, anchor_val: f32, last: Beats, before: Vec<AutomationPoint> },
 }
 
 #[derive(Clone, Debug)]
@@ -790,7 +792,11 @@ fn track_lane(app: &mut XdawApp, ui: &mut Ui, t: usize, lane: Rect) {
     // Start drags.
     if resp.drag_started() {
         let start_beat = pointer_beat.unwrap_or(0.0);
-        if let (Some(target), Some(idx)) = (lane_target, point_hit) {
+        if let (Some(target), true) = (lane_target, app.arr.tool != Tool::Select) {
+            let (anchor, val) = (start_beat, pointer.map(|p| value_at_y(app, r, target, lane, p.y)).unwrap_or(0.0));
+            let before = app.project.tracks[t].lane(target).map(|l| l.points.clone()).unwrap_or_default();
+            app.arr.drag = Some(Drag { kind: DragKind::Draw { track: t, target, tool: app.arr.tool, anchor, anchor_val: val, last: anchor, before }, start_beat });
+        } else if let (Some(target), Some(idx)) = (lane_target, point_hit) {
             app.arr.drag = Some(Drag { kind: DragKind::Point { track: t, target, index: idx }, start_beat });
         } else if let Some((cid, zone)) = hit {
             let c = clips.iter().find(|c| c.id == cid).unwrap();
@@ -1129,7 +1135,49 @@ fn apply_drag(app: &mut XdawApp, drag: &Drag, pb: Beats, alt: bool, lane: Rect, 
             app.label("Move Automation Point");
         }
         DragKind::Loop { .. } => {}
+        DragKind::Draw { track, target, tool, anchor, anchor_val, last, before } => {
+            let Some(p) = pointer else { return };
+            let r = TrackRef::Track(*track);
+            let v = value_at_y(app, r, *target, lane, p.y);
+            let step = match app.arr.grid_step() {
+                s if s > 0.0 => s,
+                _ => 1.0 / 16.0,
+            };
+            let beat = pb.max(0.0);
+            let l = app.project.tracks[*track].lane_mut(*target);
+            match tool {
+                Tool::Draw => {
+                    // Paint every grid cell between the previous and the current pointer position.
+                    let (a, b) = (last.min(beat), last.max(beat));
+                    let (c0, c1) = ((a / step).floor() as i64, (b / step).floor() as i64);
+                    for c in c0..=c1 {
+                        l.draw_cell(c as f64 * step, (c + 1) as f64 * step, v);
+                    }
+                    app.label("Draw Automation");
+                }
+                Tool::Line => {
+                    l.points = before.clone();
+                    l.draw_line(*anchor, *anchor_val, app.arr.snap(beat, alt), v, step);
+                    app.label("Draw Automation Line");
+                }
+                Tool::Erase => {
+                    let slack = 3.0 / app.arr.view.px_per_beat as f64;
+                    l.erase_range(last.min(beat) - slack, last.max(beat) + slack);
+                    app.label("Erase Automation");
+                }
+                Tool::Select => {}
+            }
+            if let Some(Drag { kind: DragKind::Draw { last, .. }, .. }) = app.arr.drag.as_mut() {
+                *last = beat;
+            }
+        }
     }
+}
+
+/// Value of an automation target for a pointer height inside a lane.
+fn value_at_y(app: &XdawApp, r: TrackRef, target: ParamTarget, lane: Rect, y: f32) -> f32 {
+    let n = (1.0 - (y - lane.top()) / lane.height()).clamp(0.0, 1.0);
+    target_from_norm(&app.project, r, target, n)
 }
 
 fn draw_clip(app: &XdawApp, p: &egui::Painter, c: &ArrangementClip, rect: Rect) {
