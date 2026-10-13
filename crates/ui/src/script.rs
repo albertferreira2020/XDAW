@@ -301,6 +301,42 @@ impl Script {
                     );
                 }
                 "tempo" => app.project.transport.bpm = num(0),
+                // selarr TRACK [INDEX...]: select arrangement clips (all of the track when no index)
+                "selarr" => {
+                    let t = num(0) as usize;
+                    if let Some(tr) = app.project.tracks.get(t) {
+                        let ids: Vec<_> = tr.arrangement.iter().enumerate().filter(|(i, _)| args.len() < 2 || args[1..].iter().any(|a| a.parse::<usize>().ok() == Some(*i))).map(|(_, c)| (t, c.id)).collect();
+                        app.sel.arr_clips = ids;
+                        app.sel.clip = None;
+                    }
+                }
+                "reverse" => crate::audio_ops::reverse_selection(app),
+                "consolidate" => crate::audio_ops::consolidate_selection(app),
+                "crossfade" => crate::arrangement::crossfade_selected(app),
+                // slice grid BEATS | slice transients SENS
+                "slice" => {
+                    let mode = if args.first() == Some(&"grid") { crate::audio_ops::SliceMode::Grid(num(1)) } else { crate::audio_ops::SliceMode::Transients(num(1) as f32) };
+                    crate::audio_ops::slice_to_midi(app, mode);
+                }
+                "freeze" => {
+                    crate::audio_ops::freeze_track(app, num(0) as usize);
+                }
+                "unfreeze" => crate::audio_ops::unfreeze_track(app, num(0) as usize),
+                "flattenip" => crate::audio_ops::flatten_track_in_place(app, num(0) as usize),
+                // clips TRACK: arrangement clip summary (name, start, length, kind, media)
+                "clips" => {
+                    if let Some(tr) = app.project.tracks.get(num(0) as usize) {
+                        let v: Vec<String> = tr
+                            .arrangement
+                            .iter()
+                            .map(|c| match &c.clip.content {
+                                xdaw_project::ClipContent::Audio(a) => format!("{}@{:.2}+{:.2} off={:.2} audio:{}", c.clip.name, c.start, c.length, c.offset, a.media.path),
+                                xdaw_project::ClipContent::Midi { notes } => format!("{}@{:.2}+{:.2} midi:{}n", c.clip.name, c.start, c.length, notes.len()),
+                            })
+                            .collect();
+                        println!("[script] clips kind={:?} frozen={} devices={} {:?}", tr.kind, tr.frozen.is_some(), tr.devices.len(), v);
+                    }
+                }
                 // env gain|pan|off: clip envelope shown in the sample editor
                 "env" => {
                     app.wave.env = match args.first().copied() {

@@ -677,6 +677,18 @@ fn audio_view_inner(app: &mut XdawApp, ui: &mut Ui, clip: &Clip, a: &AudioConten
             app.wave.shown = None;
         }
         ui.separator();
+        if ui.small_button("Reverse").on_hover_text("Write a reversed copy of the sample and use it").clicked() {
+            crate::audio_ops::reverse_selection(app);
+        }
+        ui.menu_button("Slice to MIDI", |ui| {
+            for (mode, label) in crate::audio_ops::SliceMode::ALL {
+                if ui.button(label).clicked() {
+                    crate::audio_ops::slice_to_midi(app, mode);
+                    ui.close();
+                }
+            }
+        });
+        ui.separator();
         ui.label("Envelope");
         ui.selectable_value(&mut app.wave.env, None, "Off");
         for t in ClipEnvTarget::ALL {

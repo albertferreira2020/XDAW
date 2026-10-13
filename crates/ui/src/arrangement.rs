@@ -954,6 +954,27 @@ fn track_lane(app: &mut XdawApp, ui: &mut Ui, t: usize, lane: Rect) {
             app.label("Insert MIDI Clip");
             ui.close();
         }
+        ui.separator();
+        if ui.button("Consolidate (Cmd+J)").clicked() {
+            crate::audio_ops::consolidate_selection(app);
+            ui.close();
+        }
+        if ui.button("Reverse").clicked() {
+            crate::audio_ops::reverse_selection(app);
+            ui.close();
+        }
+        if ui.button("Crossfade selected neighbours").clicked() {
+            crossfade_selected(app);
+            ui.close();
+        }
+        ui.menu_button("Slice to New MIDI Track", |ui| {
+            for (mode, label) in crate::audio_ops::SliceMode::ALL {
+                if ui.button(label).clicked() {
+                    crate::audio_ops::slice_to_midi(app, mode);
+                    ui.close();
+                }
+            }
+        });
         if let Some(target) = lane_target {
             if ui.button(format!("Clear {} automation", target_name(&app.project, r, target))).clicked() {
                 app.project.tracks[t].automation.retain(|l| l.target != target);
@@ -1056,6 +1077,22 @@ fn track_menu(app: &mut XdawApp, resp: &egui::Response, t: usize) {
             app.project.tracks[t].folded = !app.project.tracks[t].folded;
             app.label("Fold Track");
             ui.close();
+        }
+        let frozen = app.project.tracks[t].frozen.is_some();
+        if app.project.tracks[t].kind != TrackKind::Group {
+            if frozen {
+                if ui.button("Unfreeze Track").clicked() {
+                    crate::audio_ops::unfreeze_track(app, t);
+                    ui.close();
+                }
+            } else if ui.button("Freeze Track").on_hover_text("Render the track with its devices; playback uses the audio").clicked() {
+                crate::audio_ops::freeze_track(app, t);
+                ui.close();
+            }
+            if ui.button("Flatten Track").on_hover_text("Replace clips and devices by the rendered audio (undoable)").clicked() {
+                crate::audio_ops::flatten_track_in_place(app, t);
+                ui.close();
+            }
         }
         if !app.project.tracks[t].take_lanes.is_empty() && ui.button("Delete all takes").clicked() {
             app.project.tracks[t].take_lanes.clear();
@@ -1443,4 +1480,32 @@ pub fn paste(app: &mut XdawApp) {
     app.sel.arr_clips = new_sel;
     app.label("Paste");
     let _ = song_end(&app.project);
+}
+
+/// Crossfades every pair of selected neighbouring audio clips on a track.
+pub fn crossfade_selected(app: &mut XdawApp) {
+    let len = app.arr.grid_step().clamp(1.0 / 16.0, 0.5).max(0.125);
+    let sel = app.sel.arr_clips.clone();
+    let mut n = 0;
+    let mut err = None;
+    for t in 0..app.project.tracks.len() {
+        let ids: Vec<Id> = sel.iter().filter(|(tt, _)| *tt == t).map(|(_, id)| *id).collect();
+        let mut i = 0;
+        while i + 1 < app.project.tracks[t].arrangement.len() {
+            let (a, b) = (app.project.tracks[t].arrangement[i].id, app.project.tracks[t].arrangement[i + 1].id);
+            if ids.contains(&a) && ids.contains(&b) {
+                match app.project.tracks[t].crossfade(i, len) {
+                    Ok(_) => n += 1,
+                    Err(e) => err = Some(e),
+                }
+            }
+            i += 1;
+        }
+    }
+    if n > 0 {
+        app.label("Crossfade");
+        app.status_line = format!("Crossfaded {n} join(s)");
+    } else {
+        app.status_line = format!("Crossfade: {}", err.unwrap_or("select two neighbouring audio clips that touch"));
+    }
 }

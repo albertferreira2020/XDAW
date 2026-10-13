@@ -2,6 +2,7 @@
 
 mod app;
 mod arr_strip;
+mod audio_ops;
 mod arrangement;
 mod arrec;
 mod browser;

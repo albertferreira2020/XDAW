@@ -991,6 +991,7 @@ impl XdawApp {
                     Key::O => self.dialogs.open_requested = true,
                     Key::N => self.dialogs.new_requested = true,
                     Key::E => arrangement::split_selected(self),
+                    Key::J => crate::audio_ops::consolidate_selection(self),
                     Key::D => self.duplicate_selection(),
                     Key::C => self.copy_selection(),
                     Key::V => self.paste(),
