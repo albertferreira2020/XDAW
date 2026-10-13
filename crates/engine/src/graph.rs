@@ -133,6 +133,8 @@ pub struct AudioTail {
     pub slot: usize,
     pub origin: Beats,
     pub remaining: u32,
+    /// First sample of the current block at which the tail sounds.
+    pub start_offset: u32,
 }
 
 pub const TAIL_SAMPLES: u32 = 96; // 2 ms at 48 kHz

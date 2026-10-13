@@ -876,7 +876,7 @@ fn end_source_of(t: &mut RtTrack, offset: usize) {
     end_clip_notes(t, offset);
     if let Some(p) = t.rt.launcher.playing {
         if matches!(t.slots.get(p.slot), Some(Some(RtClip { content: RtContent::Audio { .. }, .. }))) {
-            t.rt.tail = Some(AudioTail { from_arrangement: false, slot: p.slot, origin: p.origin, remaining: TAIL_SAMPLES });
+            t.rt.tail = Some(AudioTail { from_arrangement: false, slot: p.slot, origin: p.origin, remaining: TAIL_SAMPLES, start_offset: offset as u32 });
         }
     }
 }
@@ -1217,6 +1217,8 @@ fn render_tail(t: &mut RtTrack, span: &Span, a: usize, b: usize) {
     };
     let to_frames = 60.0 / *source_bpm * data.sample_rate;
     let bps = span.clock.beats_per_sample();
+    let a = a.max(tail.start_offset as usize);
+    tail.start_offset = 0;
     let ba = span.beat(a);
     for i in a..b {
         if tail.remaining == 0 {

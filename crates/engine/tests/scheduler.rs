@@ -143,12 +143,16 @@ fn replacing_clip_switches_on_same_sample_without_gap() {
     rig.render(30_000, 256);
     rig.handle.send(Command::LaunchSlot { track: 0, slot: 1, down: true });
     let (l, _) = rig.render(80_000, 256);
-    // Bar 2 begins at sample 96000 (= 66000 into this render).
-    let first_neg = l.iter().position(|&x| x < 0.0).unwrap() + 30_000;
-    assert_eq!(first_neg, 96_000);
-    // No silent sample across the switch (old clip fades out while new fades in).
-    let around = &l[66_000 - 10..66_000 + 200];
-    assert!(around.iter().all(|x| x.abs() > 1e-6), "gap at switch");
+    // Bar 2 begins at sample 96000 (= 66000 into this render): the old clip is
+    // untouched before it, the 2 ms crossfade starts exactly on it, and only the
+    // new clip remains afterwards.
+    let b = 66_000;
+    assert!((l[b - 1] - 0.5).abs() < 1e-6, "old clip intact before boundary");
+    assert!(l[b] < 0.5 - 1e-3, "transition starts on the boundary sample");
+    assert!((l[b + 96] + 0.25).abs() < 1e-6, "only the new clip after the crossfade: {}", l[b + 96]);
+    // No silent sample across the switch beyond the zero crossing of the fade.
+    let silent = l[b - 10..b + 200].iter().filter(|x| x.abs() < 1e-6).count();
+    assert!(silent <= 1, "gap at switch");
 }
 
 #[test]
