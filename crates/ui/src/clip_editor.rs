@@ -34,11 +34,13 @@ pub struct WaveState {
     /// Sample length in beats and the waveform's left edge, for the scroll bar.
     total: f64,
     left: f32,
+    /// Clip envelope being edited over the waveform.
+    pub env: Option<ClipEnvTarget>,
 }
 
 impl Default for WaveState {
     fn default() -> Self {
-        Self { view: HView::new(40.0, 0.5, 4000.0), width: 600.0, shown: None, total: 0.0, left: 0.0 }
+        Self { view: HView::new(40.0, 0.5, 4000.0), width: 600.0, shown: None, total: 0.0, left: 0.0, env: None }
     }
 }
 
@@ -674,7 +676,19 @@ fn audio_view_inner(app: &mut XdawApp, ui: &mut Ui, clip: &Clip, a: &AudioConten
         if ui.small_button("Fit").on_hover_text("Show the whole sample").clicked() {
             app.wave.shown = None;
         }
-        ui.label(egui::RichText::new("pinch/Cmd+wheel: zoom · wheel/scroll bar: scroll · double-click: warp marker · drag: S/L/E").size(10.0).color(theme::TEXT_DIM));
+        ui.separator();
+        ui.label("Envelope");
+        ui.selectable_value(&mut app.wave.env, None, "Off");
+        for t in ClipEnvTarget::ALL {
+            ui.selectable_value(&mut app.wave.env, Some(t), t.name());
+        }
+        if app.wave.env.is_some() {
+            for t in crate::arrangement::Tool::ALL {
+                ui.selectable_value(&mut app.arr.tool, t, t.label());
+            }
+        } else {
+            ui.label(egui::RichText::new("pinch/Cmd+wheel: zoom · double-click: warp marker · drag: S/L/E").size(10.0).color(theme::TEXT_DIM));
+        }
     });
     let avail = ui.available_size() - vec2(0.0, timeline::SCROLLBAR_H + 2.0);
     let (rect, resp) = ui.allocate_exact_size(avail.max(vec2(100.0, 40.0)), Sense::click_and_drag());
@@ -746,6 +760,10 @@ fn audio_view_inner(app: &mut XdawApp, ui: &mut Ui, clip: &Clip, a: &AudioConten
         p.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1.0, theme::ACCENT));
         p.text(pos2(x + 2.0, rect.bottom() - 12.0), Align2::LEFT_TOP, format!("{:.2}", m.beat), FontId::proportional(9.5), theme::ACCENT);
     }
+    if let Some(target) = app.wave.env {
+        envelope_edit(app, ui, &p, &resp, rect, view, target, a);
+        return;
+    }
     if resp.double_clicked() {
         if let Some(q) = resp.interact_pointer_pos() {
             let secs = beat_of(q.x) * 60.0 / a.source_bpm;
@@ -789,6 +807,108 @@ fn audio_view_inner(app: &mut XdawApp, ui: &mut Ui, clip: &Clip, a: &AudioConten
                 }
             }
             app.label("Clip Region");
+        }
+    }
+}
+
+/// Runs `f` on the selected audio clip's envelope for `target` (created on demand).
+fn with_envelope(app: &mut XdawApp, target: ClipEnvTarget, f: impl FnOnce(&mut ClipEnvelope)) {
+    if let Some(Clip { content: ClipContent::Audio(a), .. }) = app.selected_clip_mut() {
+        let i = match a.envelopes.iter().position(|e| e.target == target) {
+            Some(i) => i,
+            None => {
+                a.envelopes.push(ClipEnvelope::new(target));
+                a.envelopes.len() - 1
+            }
+        };
+        f(&mut a.envelopes[i]);
+        if a.envelopes[i].points.is_empty() {
+            a.envelopes.remove(i);
+        }
+    }
+}
+
+/// Edits a clip envelope over the waveform with the Arrangement's drawing tools.
+#[allow(clippy::too_many_arguments)]
+fn envelope_edit(app: &mut XdawApp, ui: &mut Ui, p: &egui::Painter, resp: &egui::Response, rect: Rect, view: HView, target: ClipEnvTarget, a: &AudioContent) {
+    use crate::arrangement::Tool;
+    let (lo, hi, neutral) = target.range();
+    let y_of = |v: f32| rect.bottom() - ((v - lo) / (hi - lo)).clamp(0.0, 1.0) * rect.height();
+    let v_of = |y: f32| lo + (1.0 - (y - rect.top()) / rect.height()).clamp(0.0, 1.0) * (hi - lo);
+    let pts: Vec<AutomationPoint> = a.envelopes.iter().find(|e| e.target == target).map(|e| e.points.clone()).unwrap_or_default();
+    let stroke = Stroke::new(1.5, Color32::from_rgb(255, 120, 120));
+    p.line_segment([pos2(rect.left(), y_of(neutral)), pos2(rect.right(), y_of(neutral))], Stroke::new(1.0, Color32::from_white_alpha(40)));
+    let pos: Vec<Pos2> = pts.iter().map(|q| pos2(view.x(rect, q.beat), y_of(q.value))).collect();
+    if let (Some(f), Some(l)) = (pos.first(), pos.last()) {
+        p.line_segment([pos2(rect.left(), f.y), *f], stroke);
+        for w in pos.windows(2) {
+            p.line_segment([w[0], w[1]], stroke);
+        }
+        p.line_segment([*l, pos2(rect.right(), l.y)], stroke);
+    }
+    let hover = resp.hover_pos();
+    let near = hover.and_then(|h| pos.iter().position(|q| q.distance(h) < 7.0));
+    for (i, q) in pos.iter().enumerate() {
+        p.circle_filled(*q, if near == Some(i) { 4.5 } else { 3.0 }, Color32::from_rgb(255, 150, 150));
+    }
+    p.text(rect.right_top() + vec2(-4.0, 2.0), Align2::RIGHT_TOP, format!("{} · {} tool", target.name(), app.arr.tool.label()), FontId::proportional(9.5), theme::TEXT_DIM);
+    let step = match app.arr.grid_step() {
+        s if s > 0.0 => s,
+        _ => 1.0 / 16.0,
+    };
+    let beat_at = |x: f32| view.beat(rect, x).max(0.0);
+    let id = egui::Id::new(("env_drag", target));
+    let tool = app.arr.tool;
+    if resp.drag_started() {
+        if let Some(q) = resp.interact_pointer_pos() {
+            let idx = pos.iter().position(|c| c.distance(q) < 7.0);
+            let b = beat_at(q.x);
+            ui.data_mut(|m| m.insert_temp(id, (idx, b, v_of(q.y), b, pts.clone())));
+        }
+    }
+    if resp.dragged() {
+        if let (Some(q), Some((idx, anchor, anchor_val, last, before))) = (resp.interact_pointer_pos(), ui.data(|m| m.get_temp::<(Option<usize>, f64, f32, f64, Vec<AutomationPoint>)>(id))) {
+            let (b, v) = (beat_at(q.x), v_of(q.y));
+            match (tool, idx) {
+                (Tool::Select, Some(i)) => with_envelope(app, target, |e| {
+                    if let Some(pt) = e.points.get_mut(i) {
+                        pt.beat = b;
+                        pt.value = v;
+                    }
+                    e.points.sort_by(|x, y| x.beat.total_cmp(&y.beat));
+                }),
+                (Tool::Select, None) => {}
+                (Tool::Draw, _) => with_envelope(app, target, |e| {
+                    let (c0, c1) = ((last.min(b) / step).floor() as i64, (last.max(b) / step).floor() as i64);
+                    for c in c0..=c1 {
+                        e.draw_cell(c as f64 * step, (c + 1) as f64 * step, v);
+                    }
+                }),
+                (Tool::Line, _) => with_envelope(app, target, |e| {
+                    e.points = before.clone();
+                    e.draw_line(anchor, anchor_val, b, v, step);
+                }),
+                (Tool::Erase, _) => {
+                    let slack = 3.0 / view.px_per_beat as f64;
+                    with_envelope(app, target, |e| e.erase_range(last.min(b) - slack, last.max(b) + slack));
+                }
+            }
+            ui.data_mut(|m| m.insert_temp(id, (idx, anchor, anchor_val, b, before)));
+            app.label("Edit Clip Envelope");
+        }
+    }
+    if tool == Tool::Select && resp.double_clicked() {
+        if let Some(q) = resp.interact_pointer_pos() {
+            match pos.iter().position(|c| c.distance(q) < 7.0) {
+                Some(i) => with_envelope(app, target, |e| {
+                    e.points.remove(i);
+                }),
+                None => {
+                    let b = (beat_at(q.x) / step).round() * step;
+                    with_envelope(app, target, |e| insert_point(&mut e.points, AutomationPoint { beat: b, value: v_of(q.y) }));
+                }
+            }
+            app.label("Edit Clip Envelope");
         }
     }
 }

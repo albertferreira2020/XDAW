@@ -301,6 +301,23 @@ impl Script {
                     );
                 }
                 "tempo" => app.project.transport.bpm = num(0),
+                // env gain|pan|off: clip envelope shown in the sample editor
+                "env" => {
+                    app.wave.env = match args.first().copied() {
+                        Some("gain") => Some(xdaw_project::ClipEnvTarget::Gain),
+                        Some("pan") => Some(xdaw_project::ClipEnvTarget::Pan),
+                        _ => None,
+                    };
+                }
+                // envpoints: print the selected clip's envelopes
+                "envpoints" => {
+                    if let Some(xdaw_project::Clip { content: xdaw_project::ClipContent::Audio(a), .. }) = app.selected_clip() {
+                        for e in &a.envelopes {
+                            let pts: Vec<String> = e.points.iter().map(|p| format!("{:.2}:{:.1}", p.beat, p.value)).collect();
+                            println!("[script] envpoints {:?} n={} {:?}", e.target, pts.len(), pts);
+                        }
+                    }
+                }
                 // autolane TRACK volume|pan|none: automation lane shown on a track
                 "autolane" => {
                     if let Some(t) = app.project.tracks.get(num(0) as usize) {
