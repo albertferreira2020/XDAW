@@ -271,6 +271,8 @@ pub struct Graph {
     /// Group buses, indexed like `tracks` (only group tracks use theirs).
     pub group_l: Vec<Vec<f32>>,
     pub group_r: Vec<Vec<f32>>,
+    /// Group tracks, deepest nesting first.
+    pub group_order: Vec<usize>,
 }
 
 impl Graph {
@@ -451,6 +453,19 @@ pub fn build_graph(project: &Project, media: &dyn MediaSource, sample_rate: f64)
         tracks[i].output_group = t.group.and_then(|g| project.tracks.iter().position(|x| x.id == g && x.kind == TrackKind::Group));
     }
     let groups = project.tracks.len();
+    let depth = |mut i: usize| {
+        let mut d = 0;
+        while let Some(g) = tracks[i].output_group {
+            d += 1;
+            i = g;
+            if d > groups {
+                break;
+            }
+        }
+        d
+    };
+    let mut group_order: Vec<usize> = (0..groups).filter(|&i| tracks[i].kind == TrackKind::Group).collect();
+    group_order.sort_by_key(|&i| std::cmp::Reverse(depth(i)));
     Ok(Graph {
         sample_rate,
         tracks,
@@ -462,6 +477,7 @@ pub fn build_graph(project: &Project, media: &dyn MediaSource, sample_rate: f64)
         return_r: vec![vec![0.0; MAX_BLOCK]; project.returns.len()],
         group_l: vec![vec![0.0; MAX_BLOCK]; groups],
         group_r: vec![vec![0.0; MAX_BLOCK]; groups],
+        group_order,
     })
 }
 

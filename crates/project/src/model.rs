@@ -602,8 +602,18 @@ impl Project {
             issues.push(format!("unexpected format '{}'", self.format));
         }
         for t in &self.tracks {
-            if t.kind == TrackKind::Group && (t.group.is_some() || t.slots.iter().any(|s| s.clip.is_some()) || !t.arrangement.is_empty()) {
-                issues.push(format!("group track '{}' cannot hold clips or be nested", t.name));
+            if t.kind == TrackKind::Group && (t.slots.iter().any(|s| s.clip.is_some()) || !t.arrangement.is_empty()) {
+                issues.push(format!("group track '{}' cannot hold clips", t.name));
+            }
+            // Nested groups are allowed, loops are not.
+            let (mut cur, mut hops) = (t.group, 0);
+            while let Some(g) = cur {
+                hops += 1;
+                if g == t.id || hops > self.tracks.len() {
+                    issues.push(format!("track '{}' is part of a group loop", t.name));
+                    break;
+                }
+                cur = self.tracks.iter().find(|x| x.id == g).and_then(|x| x.group);
             }
             if let Some(g) = t.group {
                 if !self.tracks.iter().any(|x| x.id == g && x.kind == TrackKind::Group) {

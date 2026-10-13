@@ -750,7 +750,16 @@ impl Renderer {
         }
         // Pass 0: clip tracks (feed group buses or master). Pass 1: group tracks.
         for pass in 0..2 {
-        for ti in 0..self.graph.tracks.len() {
+        for k in 0..self.graph.tracks.len() {
+            // Groups run innermost first so a nested group's output reaches its parent bus in time.
+            let ti = if pass == 1 {
+                match self.graph.group_order.get(k) {
+                    Some(&g) => g,
+                    None => break,
+                }
+            } else {
+                k
+            };
             let is_group = self.graph.tracks[ti].kind == TrackKind::Group;
             if (pass == 1) != is_group {
                 continue;

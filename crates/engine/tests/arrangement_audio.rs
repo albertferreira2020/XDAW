@@ -160,3 +160,32 @@ fn consolidated_audio_is_unity_gain_and_ignores_the_mixer() {
     let (l, r) = render_track_offline(&p2, &media(), 0, &s, false).unwrap();
     assert!((l[at(2.0)] - 0.5).abs() < 1e-4 && (r[at(2.0)] - 0.5).abs() < 1e-4, "{} {}", l[at(2.0)], r[at(2.0)]);
 }
+
+#[test]
+fn nested_groups_apply_each_level_in_order() {
+    let mut p = Project::new("x");
+    let c = clip(&mut p, vec![]);
+    let mut p = project(vec![(0.0, 4.0, 0.0, c)]); // track 0: audio source
+    // The inner group has a LOWER index than the outer one in one case and a higher one in the other.
+    for outer_first in [false, true] {
+        let mut q = p.clone();
+        let (a, b) = (q.add_track(TrackKind::Group, "inner"), q.add_track(TrackKind::Group, "outer"));
+        let (inner, outer) = if outer_first { (b, a) } else { (a, b) };
+        q.tracks[inner].mixer.volume_db = -6.0;
+        q.tracks[outer].mixer.volume_db = -6.0;
+        let (iid, oid) = (q.tracks[inner].id, q.tracks[outer].id);
+        q.tracks[0].group = Some(iid);
+        q.tracks[inner].group = Some(oid);
+        assert!(q.validate().is_empty(), "{:?}", q.validate());
+        let (l, _) = render(&q, 4.0);
+        let expected = 0.5 * 10f32.powf(-12.0 / 20.0);
+        assert!((l[at(2.0)] - expected).abs() / expected < 0.02, "outer_first={outer_first}: {} vs {expected}", l[at(2.0)]);
+    }
+    // A loop is rejected.
+    let a = p.add_track(TrackKind::Group, "a");
+    let b = p.add_track(TrackKind::Group, "b");
+    let (ia, ib) = (p.tracks[a].id, p.tracks[b].id);
+    p.tracks[a].group = Some(ib);
+    p.tracks[b].group = Some(ia);
+    assert!(p.validate().iter().any(|i| i.contains("loop")));
+}
