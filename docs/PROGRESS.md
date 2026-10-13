@@ -100,3 +100,17 @@ Repository: `~/Documents/XDAW` (local git, branch `main`, no remote yet). REA li
 - Tests: limiter ceiling/recovery/silence, preset validity, and an offline export where the
   Safety Ceiling preset holds the master peak at -1 dB (the same chain clips without it).
 - Not verified: clicking the new menu in the running UI.
+
+## Arrangement recording, takes, editing tools (2026-10-13)
+- Engine: `Command::ArrRecord` (punch window, one take per loop pass), clip gain/pan envelopes,
+  per-note chance, nested groups (`group_order`), frozen tracks (`render_track_offline`), edge declick
+  off for frozen renders so freeze null-tests within 0.1 % of the live track.
+- Project model: take lanes + comping, crossfade, MIDI consolidation, reverse alignment, flatten,
+  locators, punch flags, drawing tools shared by lanes and envelopes (`arrange.rs`).
+- UI: take lanes, fold, mixer column, locators, time ruler, adaptive/triplet grid, drawing tools,
+  multi-clip piano roll, envelope editor, `audio_ops.rs` (freeze, flatten, reverse, consolidate, slice).
+- Tests: 132 pass. Bug found by the freeze null test: the 2 ms edge fade changed the first frames of a
+  frozen render. Bug found by review of `sync.rs`: edits made while frozen would have replaced the frozen
+  audio; fixed and covered by a test.
+- Not verified: real input-device recording through the UI, mouse comping drag, audible check of reverse
+  and slices.

@@ -182,8 +182,22 @@ pub fn track_header(app: &mut XdawApp, ui: &mut Ui, r: TrackRef) {
                 app.label("Duplicate Track");
                 ui.close();
             }
-            if app.project.tracks[i].kind != TrackKind::Group {
-                let groups: Vec<(Id, String)> = app.project.tracks.iter().filter(|g| g.kind == TrackKind::Group).map(|g| (g.id, g.name.clone())).collect();
+            {
+                // Any group may take this track, except itself and groups already inside it (no loops).
+                let me = app.project.tracks[i].id;
+                let inside_me = |mut g: Id| {
+                    for _ in 0..16 {
+                        if g == me {
+                            return true;
+                        }
+                        match app.project.tracks.iter().find(|x| x.id == g).and_then(|x| x.group) {
+                            Some(parent) => g = parent,
+                            None => return false,
+                        }
+                    }
+                    true
+                };
+                let groups: Vec<(Id, String)> = app.project.tracks.iter().filter(|g| g.kind == TrackKind::Group && !inside_me(g.id)).map(|g| (g.id, g.name.clone())).collect();
                 if !groups.is_empty() || app.project.tracks[i].group.is_some() {
                     ui.menu_button("Group", |ui| {
                         for (gid, name) in groups {

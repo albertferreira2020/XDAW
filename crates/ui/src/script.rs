@@ -312,6 +312,27 @@ impl Script {
                     }
                 }
                 "reverse" => crate::audio_ops::reverse_selection(app),
+                // locator BEAT: add a locator; fold TRACK: toggle folding; showtakes TRACK
+                "locator" => {
+                    app.arr.cursor = num(0);
+                    crate::arrangement::add_locator(app);
+                }
+                "fold" => {
+                    if let Some(t) = app.project.tracks.get_mut(num(0) as usize) {
+                        t.folded = !t.folded;
+                    }
+                }
+                // groupin MEMBER GROUP: put track MEMBER into group track GROUP
+                "groupin" => {
+                    let gid = app.project.tracks.get(num(1) as usize).map(|g| g.id);
+                    if let (Some(gid), Some(m)) = (gid, app.project.tracks.get_mut(num(0) as usize)) {
+                        m.group = Some(gid);
+                    }
+                }
+                "newgroup" => {
+                    let n = app.project.tracks.len() + 1;
+                    app.project.add_track(xdaw_project::TrackKind::Group, &format!("{n} Group"));
+                }
                 // selectnotes: select every note of every edited clip; transpose N; notesum TRACK
                 "selectnotes" => crate::clip_editor::select_all(app),
                 "transpose" => crate::clip_editor::transpose_notes(app, num(0) as i32),

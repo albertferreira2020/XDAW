@@ -3,17 +3,25 @@
 Compared against the public Live material (Session and Arrangement views, devices, recording,
 warping) and our own `FEATURE_MATRIX.md`. Ordered by how much a user notices the gap.
 
-## Arrangement and editing
-1. Arrangement audio/MIDI recording with punch in/out and takes (comping lanes).
-2. Multi-clip MIDI editing, and per-note velocity/probability lanes in the piano roll.
-3. Track folding and nested groups; track freeze/flatten.
-4. Mixer strip column beside the Arrangement (volume, pan, sends, meters per track).
-5. Time ruler in seconds/bars switch, locators with names, and a global grid/triplet mode.
-6. Clip envelopes (clip-level automation) and automation drawing tools (pencil, curve, snap).
-7. Audio editing: consolidate, reverse, fades UI, crossfades, slice to new MIDI track.
-8. Warp UI: warp-marker editing in the sample editor, more modes (beats, tones, texture, complex).
+## Done in the second milestone (see FEATURE_MATRIX.md for how each was verified)
+1. Arrangement recording with punch in/out and take lanes (audio + MIDI).
+2. Multi-clip MIDI editing and a per-note Chance lane (Velocity lane already existed).
+3. Track folding, nested groups, Freeze / Flatten.
+4. Mixer column beside the Arrangement.
+5. Time ruler, locators, adaptive and triplet grid.
+6. Automation drawing tools and audio clip envelopes (gain, pan).
+7. Reverse, Consolidate, Crossfade, Slice to New MIDI Track (fades were already draggable).
 
-## Devices
+Known gaps inside those items:
+- Clip envelopes exist for audio clips only (no MIDI controller envelopes, no pitch envelope).
+- Takes are one lane per pass; there is no packing of non-overlapping takes into one lane.
+- MIDI recording timing is block-accurate (about 5 ms at 256 frames), not sample-accurate.
+- Slicing ignores warp markers and caps at the Drum Rack's 16 pads.
+- Frozen audio follows tempo like Re-Pitch; it is not re-rendered when the tempo changes.
+- Reverse writes a new file and clears warp markers.
+
+## Still to do
+### Devices
 9. Racks: Instrument, Drum and Effect Racks with chains, zones and macro automation.
 10. More built-in devices: EQ Eight, Glue-style compressor, Saturator, Auto Filter, Chorus,
     Phaser, Gate, Multiband, Looper, Spectrum analyser, Simpler-style slicing sampler,

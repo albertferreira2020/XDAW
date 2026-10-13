@@ -4,7 +4,7 @@
 //! buttons) rebuild the graph; everything else becomes fine-grained commands,
 //! so editing a clip or moving a fader never re-creates devices.
 
-use crate::graph::{build_graph, compile_arrangement, compile_automation, compile_clip, GraphError, MediaSource};
+use crate::graph::{build_graph, compile_arrangement, compile_automation, compile_slot, GraphError, MediaSource};
 use crate::protocol::{Command, MixParam, TrackIx};
 use xdaw_project::{Monitor, Project, Track, TrackRef};
 
@@ -23,6 +23,8 @@ struct TrackKey {
     devices: Vec<DeviceKey>,
     stops: Vec<bool>,
     group: Option<u64>,
+    /// Frozen render in use (file, tempo, length): switching it swaps devices and sources.
+    frozen: Option<(String, u64, u64)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -50,6 +52,7 @@ fn track_key(t: &Track) -> TrackKey {
             .collect(),
         stops: t.slots.iter().map(|s| s.has_stop_button).collect(),
         group: t.group,
+        frozen: t.frozen.as_ref().map(|f| (f.media.path.clone(), f.bpm.to_bits(), f.length.to_bits())),
     }
 }
 
@@ -117,7 +120,7 @@ impl Reconciler {
             if let TrackRef::Track(ti) = r {
                 for (si, (a, b)) in o.slots.iter().zip(&t.slots).enumerate() {
                     if a.clip != b.clip {
-                        let clip = b.clip.as_ref().map(|c| compile_clip(c, media, p.transport.bpm));
+                        let clip = compile_slot(t, b.clip.as_ref(), media, p.transport.bpm);
                         send(Command::SetClip { track: ti as u16, slot: si as u16, clip: Box::new(clip) });
                     }
                 }
@@ -243,5 +246,36 @@ mod tests {
         assert_eq!(names(&cmds)[0], "graph");
         assert!(!rec.needs_sync(&p, 0));
         assert!(rec.needs_sync(&p, 1), "new media triggers a rebuild");
+    }
+
+    #[test]
+    fn freezing_rebuilds_and_edits_keep_playing_the_frozen_audio() {
+        use xdaw_project::{AutomationPoint, Frozen, MediaRef};
+        let media: HashMap<String, std::sync::Arc<xdaw_dsp::SampleData>> = HashMap::new();
+        let mut p = Project::new("x");
+        p.add_scene("A");
+        p.add_track(TrackKind::Audio, "A");
+        let mut rec = Reconciler::new(48_000.0);
+        rec.sync(&p, &media, 0, |_| {}).unwrap();
+        let mut cmds = vec![];
+        p.tracks[0].frozen = Some(Frozen { media: MediaRef { path: "f.wav".into() }, bpm: 120.0, length: 8.0 });
+        rec.sync(&p, &media, 0, |c| cmds.push(c)).unwrap();
+        assert_eq!(names(&cmds)[0], "graph", "freezing swaps sources and devices");
+        // Changing the underlying clips while frozen must not replace the frozen audio.
+        cmds.clear();
+        let clip = xdaw_project::Clip::rendered_audio(1, "c", [0; 3], MediaRef { path: "x.wav".into() }, 120.0, 4.0);
+        p.tracks[0].arrangement.push(xdaw_project::ArrangementClip { id: 2, start: 0.0, length: 4.0, offset: 0.0, fade_in: 0.0, fade_out: 0.0, clip });
+        p.tracks[0].automation.push(xdaw_project::AutomationLane { target: xdaw_project::ParamTarget::Volume, points: vec![AutomationPoint { beat: 0.0, value: -3.0 }] });
+        rec.sync(&p, &media, 0, |c| cmds.push(c)).unwrap();
+        for c in &cmds {
+            if let Command::SetArrangement { clips, .. } = c {
+                assert_eq!(clips.len(), 1);
+                assert!(!clips[0].edges, "the frozen render is still what plays");
+            }
+        }
+        cmds.clear();
+        p.tracks[0].frozen = None;
+        rec.sync(&p, &media, 0, |c| cmds.push(c)).unwrap();
+        assert_eq!(names(&cmds)[0], "graph");
     }
 }

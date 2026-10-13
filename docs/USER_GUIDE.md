@@ -83,3 +83,22 @@ Delete remove · Enter launch selected clip · arrows move/transpose selected no
 Add **Limiter** from Browser > Audio Effects (put it last on the master). Gain drives the signal
 into the ceiling; nothing leaves the device above Ceiling. Utility, EQ Three-Band and Limiter have
 a **Presets** menu in the device header and factory entries under Browser > Presets.
+
+## Recording into the Arrangement
+Arm one or more tracks (R), optionally switch **Pin/Pout** (punch uses the loop brace), then press **Rec**.
+Audio goes to disk while the song position is inside the punch window; MIDI is collected from played notes.
+Every pass of a loop becomes its own take. Takes appear as lanes under the track (**T** button in the
+track header); drag across a take lane, or click a clip on it, to make that part the comp. Recording
+over existing material keeps it as an "Original" lane.
+
+## Navigating and editing
+- **Mixer** column (right of the lanes): activator, solo, arm, volume, pan, sends (Snd), meter.
+- **Time** ruler (m:ss) and **locators**: double-click the strip under the bar numbers, `+ Locator`,
+  drag to move, right-click to rename or delete, click to jump.
+- Snap: Auto (adapts to zoom), Off, bar … 1/32 and triplets.
+- Pick an automation lane in a track header, then use **Draw** (Select, Draw, Line, Erase) in the toolbar.
+- Right-click a clip: Consolidate (Cmd+J), Reverse, Crossfade selected neighbours, Slice to New MIDI Track.
+- Right-click a track header: Fold, Freeze/Unfreeze, Flatten Track. Groups can contain groups.
+- Piano roll: Shift-click several Arrangement MIDI clips to edit them together (Multi-clip);
+  **Lane** switches the bottom lane between Velocity and Chance.
+- Sample editor: **Envelope** selects Clip Gain or Clip Pan and edits it with the same tools.
