@@ -24,6 +24,7 @@ fn midi_clip(p: &mut Project) -> Clip {
         legato: false,
         gain_db: 0.0,
         transpose: 0,
+        follow: Default::default(),
     }
 }
 

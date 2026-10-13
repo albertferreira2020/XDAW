@@ -530,6 +530,7 @@ fn track_lane(app: &mut XdawApp, ui: &mut Ui, t: usize, lane: Rect) {
                 legato: false,
                 gain_db: 0.0,
                 transpose: 0,
+                follow: Default::default(),
             };
             let id = app.project.alloc_id();
             let start = app.arr.cursor;

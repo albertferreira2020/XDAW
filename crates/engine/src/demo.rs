@@ -280,6 +280,7 @@ fn clip(p: &mut Project, name: &str, color: [u8; 3], content: ClipContent, beats
         legato: false,
         gain_db: 0.0,
         transpose: 0,
+        follow: Default::default(),
     }
 }
 

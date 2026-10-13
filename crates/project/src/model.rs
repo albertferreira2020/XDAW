@@ -222,6 +222,9 @@ pub struct Clip {
     /// Transposition in semitones (MIDI: note offset; audio Re-Pitch: rate change).
     #[serde(default)]
     pub transpose: i32,
+    /// Session Follow Actions (Live 10 §13.6).
+    #[serde(default)]
+    pub follow: xdaw_sequencer::FollowActions,
 }
 
 impl Clip {

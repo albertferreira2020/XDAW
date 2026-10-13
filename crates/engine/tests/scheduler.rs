@@ -30,6 +30,7 @@ fn audio_clip(p: &mut Project, key: &str, beats: f64, bpm: f64) -> Clip {
         legato: false,
         gain_db: 0.0,
         transpose: 0,
+        follow: Default::default(),
     }
 }
 
@@ -45,6 +46,7 @@ fn midi_clip(p: &mut Project, notes: Vec<Note>, beats: f64) -> Clip {
         legato: false,
         gain_db: 0.0,
         transpose: 0,
+        follow: Default::default(),
     }
 }
 
@@ -456,4 +458,45 @@ fn solo_silences_other_tracks_but_not_returns() {
     let (l, _) = rig.render(5_000, 256);
     // Only track A (0.5); track B and its send are muted by solo-in-place.
     assert!((l[4_000] - 0.5).abs() < 1e-3, "{}", l[4_000]);
+}
+
+#[test]
+fn follow_actions_chain_clips_at_exact_times_and_stop() {
+    use xdaw_sequencer::{FollowAction, FollowActions};
+    let sr = 48_000.0;
+    let mut p = Project::new("f");
+    for i in 0..4 {
+        p.add_scene(&format!("S{i}"));
+    }
+    p.add_track(TrackKind::Audio, "A");
+    let mut media = Media::new();
+    media.insert("dc".into(), dc_media(30.0, sr));
+    // Group of three clips (slots 0-2), slot 3 empty ends the group.
+    for s in 0..3 {
+        let mut c = audio_clip(&mut p, "dc", 4.0, 120.0);
+        c.follow = FollowActions { time: 2.0, a: FollowAction::Next, ..Default::default() };
+        p.tracks[0].slots[s].clip = Some(c);
+    }
+    // Follow Actions ignore the global quantization (1 Bar here) — times stay at 2-beat steps.
+    let mut rig = Rig::new(&p, &media, sr);
+    rig.handle.send(Command::LaunchSlot { track: 0, slot: 0, down: true });
+    rig.render(48_000 * 4 + 10, 256); // 8 beats
+    let started: Vec<(u16, f64)> = rig
+        .events()
+        .into_iter()
+        .filter_map(|e| match e {
+            EngineEvent::ClipStarted { slot, at, .. } => Some((slot, at)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(started, vec![(0, 0.0), (1, 2.0), (2, 4.0), (0, 6.0), (1, 8.0)], "Next wraps within the group");
+
+    // Stop action.
+    let mut p2 = p.clone();
+    p2.tracks[0].slots[0].clip.as_mut().unwrap().follow = FollowActions { time: 1.0, a: FollowAction::Stop, ..Default::default() };
+    let mut rig = Rig::new(&p2, &media, sr);
+    rig.handle.send(Command::LaunchSlot { track: 0, slot: 0, down: true });
+    let (l, _) = rig.render(48_000, 256);
+    assert!(l[23_000].abs() > 0.1);
+    assert!(l[24_000 + 100..].iter().all(|x| x.abs() < 1e-6), "stopped after one beat");
 }

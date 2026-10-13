@@ -45,7 +45,7 @@ Platform: macOS 26.6.2, Apple M5, built-in output at 48 kHz. Windows/Linux: **no
 | Scene name tempo/time signature ("96 BPM", "7/8") | L10 §7.2 | Verified (parser) | `scene_names_parse_like_live_10` |
 | Capture and Insert Scene | L10 §7.4.3 | Implemented, unverified | |
 | Duplicate/rename/color/move/copy clips, drag & drop | L10 §7.4 | Implemented, unverified (UI) | |
-| Follow Actions (8 actions in Live 10) | L10 §13.6 | Not implemented | contract recorded in research notes |
+| Follow Actions (No Action, Stop, Play Again, Previous, Next, First, Last, Any, Other; chances A/B; group = adjacent clips) | L10 §13.6 | Verified (engine); UI controls unverified | `follow_actions_chain_clips_at_exact_times_and_stop`, sequencer follow tests; Previous wrap at group top is an inference |
 
 ## Arrangement View
 
@@ -123,7 +123,7 @@ Platform: macOS 26.6.2, Apple M5, built-in output at 48 kHz. Windows/Linux: **no
 
 | Feature | Status |
 | --- | --- |
-| Follow actions, racks/macros, multi-clip MIDI editing, freeze/flatten | Not implemented |
+| Racks/macros, multi-clip MIDI editing, freeze/flatten | Not implemented |
 | VST3 / Audio Unit hosting | Not implemented (`plugin-host` placeholder) |
 | Max for Live, Push | Not implemented; require their own compatibility projects |
 

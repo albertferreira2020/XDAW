@@ -1021,6 +1021,7 @@ fn render_track_source(t: &mut RtTrack, ti: usize, span: &Span, sig: xdaw_sequen
     let mut from = 0;
     loop {
         let from_beat = span.beat(from);
+        schedule_follow_action(t, from_beat, span.b1, sig);
         let Some(at) = t.rt.launcher.transition_in(from_beat, span.b1) else { break };
         let o = span.offset(at, from);
         if span.audible {
@@ -1035,12 +1036,14 @@ fn render_track_source(t: &mut RtTrack, ti: usize, span: &Span, sig: xdaw_sequen
                 }
                 let origin = t.rt.launcher.playing.map_or(at, |p| p.origin);
                 t.rt.fade_in = TAIL_SAMPLES;
+                t.rt.follow_at = t.slots.get(slot).and_then(Option::as_ref).filter(|c| c.follow.is_active()).map(|c| at + c.follow.time.max(1.0 / 64.0));
                 if t.rt.recording_slot == Some(slot) {
                     sink.push(EngineEvent::RecordingStarted { track: ti as u16, slot: slot as u16, at });
                 }
                 sink.push(EngineEvent::ClipStarted { track: ti as u16, slot: slot as u16, at, origin });
             }
             Some(LaunchEvent::Stopped { slot, at }) => {
+                t.rt.follow_at = None;
                 sink.push(EngineEvent::ClipStopped { track: ti as u16, slot: slot as u16, at });
             }
             Some(LaunchEvent::StoppedIdle { at }) => sink.push(EngineEvent::TrackReleased { track: ti as u16, at }),
@@ -1052,6 +1055,45 @@ fn render_track_source(t: &mut RtTrack, ti: usize, span: &Span, sig: xdaw_sequen
         play_source(t, ti, span, from, span.n, sink);
     }
     render_tail(t, span, 0, span.n);
+}
+
+/// Turns a due Follow Action into a pending launch/stop at its exact time
+/// (quantized only by an explicit clip quantization: Follow Actions bypass the
+/// global quantization, Live 10 §13.6).
+fn schedule_follow_action(t: &mut RtTrack, from: Beats, to: Beats, sig: xdaw_sequencer::TimeSignature) {
+    let Some(f) = t.rt.follow_at else { return };
+    if f >= to || t.rt.launcher.pending.is_some_and(|p| p.at() <= f) {
+        return;
+    }
+    let Some(p) = t.rt.launcher.playing else {
+        t.rt.follow_at = None;
+        return;
+    };
+    t.rt.follow_at = None;
+    let Some(Some(clip)) = t.slots.get(p.slot) else { return };
+    let mut first = p.slot;
+    while first > 0 && matches!(t.slots.get(first - 1), Some(Some(_))) {
+        first -= 1;
+    }
+    let mut last = p.slot;
+    while matches!(t.slots.get(last + 1), Some(Some(_))) {
+        last += 1;
+    }
+    let (r1, r2) = (t.rt.rng.next_unit(), t.rt.rng.next_unit());
+    let at_raw = f.max(from);
+    let q = match clip.quantize {
+        xdaw_sequencer::ClipQuantize::Fixed(q) => q,
+        xdaw_sequencer::ClipQuantize::Global => Quantize::None,
+    };
+    let at = q.next_boundary(at_raw, sig);
+    match clip.follow.resolve(p.slot, first, last, r1, r2) {
+        xdaw_sequencer::FollowResult::Nothing => {}
+        xdaw_sequencer::FollowResult::Stop => t.rt.launcher.pending = Some(xdaw_sequencer::Pending::Stop { at }),
+        xdaw_sequencer::FollowResult::Launch(slot) => {
+            let legato = t.slots.get(slot).and_then(Option::as_ref).is_some_and(|c| c.legato);
+            t.rt.launcher.pending = Some(xdaw_sequencer::Pending::Launch { slot, at, legato });
+        }
+    }
 }
 
 fn play_source(t: &mut RtTrack, ti: usize, span: &Span, a: usize, b: usize, sink: &mut EventSink) {

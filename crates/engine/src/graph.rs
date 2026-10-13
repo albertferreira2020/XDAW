@@ -48,6 +48,7 @@ pub struct RtClip {
     pub legato: bool,
     pub gain: f32,
     pub transpose: i32,
+    pub follow: xdaw_sequencer::FollowActions,
     pub content: RtContent,
 }
 
@@ -153,6 +154,9 @@ pub struct TrackRuntime {
     pub tail: Option<AudioTail>,
     pub fade_in: u32,
     pub clipped: bool,
+    /// Song beat at which the playing clip's Follow Action fires.
+    pub follow_at: Option<Beats>,
+    pub rng: xdaw_dsp::util::Rng,
 }
 
 impl TrackRuntime {
@@ -170,6 +174,8 @@ impl TrackRuntime {
             tail: None,
             fade_in: 0,
             clipped: false,
+            follow_at: None,
+            rng: xdaw_dsp::util::Rng::new(0x5EED_1234),
         }
     }
 }
@@ -247,6 +253,7 @@ pub fn compile_clip(clip: &model::Clip, media: &dyn MediaSource) -> RtClip {
         legato: clip.legato,
         gain: db_to_gain(clip.gain_db),
         transpose: clip.transpose,
+        follow: clip.follow,
         content,
     }
 }
@@ -384,6 +391,8 @@ pub fn transfer_state(old: &mut Graph, new: &mut Graph) {
         std::mem::swap(&mut o.rt.recording_slot, &mut new.rt.recording_slot);
         std::mem::swap(&mut o.rt.automation_overridden, &mut new.rt.automation_overridden);
         new.rt.tail = o.rt.tail.take();
+        new.rt.follow_at = o.rt.follow_at;
+        new.rt.rng = o.rt.rng;
         let (vol, pl, pr) = (new.rt.volume.target(), new.rt.pan_l.target(), new.rt.pan_r.target());
         std::mem::swap(&mut o.rt.volume, &mut new.rt.volume);
         std::mem::swap(&mut o.rt.pan_l, &mut new.rt.pan_l);

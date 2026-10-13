@@ -307,6 +307,7 @@ fn slot(app: &mut XdawApp, ui: &mut Ui, t: usize, s: usize) {
             legato: false,
             gain_db: 0.0,
             transpose: 0,
+            follow: Default::default(),
         };
         app.project.tracks[t].slots[s].clip = Some(clip);
         app.sel.clip = Some(ClipLoc::Slot { track: t, slot: s });
@@ -385,6 +386,7 @@ fn slot_menu(app: &mut XdawApp, ui: &mut Ui, t: usize, s: usize) {
             legato: false,
             gain_db: 0.0,
             transpose: 0,
+            follow: Default::default(),
         };
         app.project.tracks[t].slots[s].clip = Some(clip);
         app.label("Insert MIDI Clip");

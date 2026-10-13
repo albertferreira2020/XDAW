@@ -293,6 +293,7 @@ fn make_clip(app: &mut XdawApp, path: &Path, content: ClipContent, beats: f64, t
         legato: false,
         gain_db: 0.0,
         transpose: 0,
+        follow: Default::default(),
     }
 }
 

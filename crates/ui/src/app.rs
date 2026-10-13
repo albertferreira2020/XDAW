@@ -571,6 +571,7 @@ impl XdawApp {
                         legato: false,
                         gain_db: 0.0,
                         transpose: 0,
+                        follow: Default::default(),
                     };
                     if let Some(s) = self.project.tracks[t].slots.get_mut(take.slot) {
                         s.clip = Some(clip);
@@ -614,6 +615,7 @@ impl XdawApp {
             legato: false,
             gain_db: 0.0,
             transpose: 0,
+            follow: Default::default(),
         };
         self.media.request(&path, io::resolve_media(&MediaRef { path: path.clone() }, self.project_dir().as_deref()));
         if let Some(s) = self.project.tracks.get_mut(t).and_then(|tr| tr.slots.get_mut(slot)) {

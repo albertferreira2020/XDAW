@@ -109,6 +109,7 @@ fn export_matches_realtime_render_of_the_same_state() {
         legato: false,
         gain_db: 0.0,
         transpose: 0,
+        follow: Default::default(),
     };
     p.tracks[0].arrangement.push(ArrangementClip { id: 99, start: 0.0, length: 8.0, offset: 0.0, fade_in: 0.0, fade_out: 0.0, clip });
     let settings = ExportSettings { start: 0.0, end: 8.0, tail_seconds: 0.0, sample_rate: 48_000, format: SampleFormat::Float32, dither: false };
@@ -155,6 +156,7 @@ fn launch_transition_has_no_click() {
             legato: false,
             gain_db: 0.0,
             transpose: 0,
+            follow: Default::default(),
         });
     }
     let g = build_graph(&p, &media, sr).unwrap();

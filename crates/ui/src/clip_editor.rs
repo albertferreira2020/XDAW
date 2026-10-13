@@ -97,6 +97,23 @@ fn properties(app: &mut XdawApp, ui: &mut Ui, loc: ClipLoc) {
             }
         });
         changed |= ui.checkbox(&mut c.legato, "Legato").changed();
+        ui.label(egui::RichText::new("Follow Actions").color(theme::TEXT_DIM));
+        let f = &mut c.follow;
+        ui.horizontal(|ui| {
+            ui.label("Time");
+            changed |= ui.add(egui::DragValue::new(&mut f.time).range(0.0625..=256.0).speed(0.05).suffix(" beats")).changed();
+        });
+        for (label, action, chance) in [("A", &mut f.a, &mut f.chance_a), ("B", &mut f.b, &mut f.chance_b)] {
+            ui.horizontal(|ui| {
+                egui::ComboBox::from_id_salt(("follow", label)).width(90.0).selected_text(action.label()).show_ui(ui, |ui| {
+                    for a in xdaw_sequencer::FollowAction::ALL {
+                        changed |= ui.selectable_value(action, a, a.label()).changed();
+                    }
+                });
+                ui.label("Chance");
+                changed |= ui.add(egui::DragValue::new(chance).range(0..=100)).changed();
+            });
+        }
         ui.separator();
     }
     match &mut c.content {
