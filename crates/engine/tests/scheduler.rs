@@ -413,3 +413,47 @@ fn sends_reach_returns_and_mute_solo_gate() {
     let (l, _) = rig.render(5_000, 256);
     assert!(l[4_000].abs() < 1e-4, "mute silences track and its sends: {}", l[4_000]);
 }
+
+#[test]
+fn gate_stops_on_release_and_toggle_stops_on_second_press() {
+    let sr = 48_000.0;
+    let (mut p, media) = one_audio_track(sr, 120.0);
+    p.tracks[0].slots[0].clip.as_mut().unwrap().launch_mode = xdaw_sequencer::LaunchMode::Gate;
+    p.tracks[0].slots[0].clip.as_mut().unwrap().quantize = ClipQuantize::Fixed(xdaw_sequencer::Quantize::None);
+    let mut rig = Rig::new(&p, &media, sr);
+    rig.handle.send(Command::LaunchSlot { track: 0, slot: 0, down: true });
+    let (l, _) = rig.render(1_000, 256);
+    assert!(l[500].abs() > 0.1);
+    rig.handle.send(Command::LaunchSlot { track: 0, slot: 0, down: false });
+    let (l, _) = rig.render(1_000, 256);
+    assert!(l[500..].iter().all(|x| x.abs() < 1e-6), "gate release stops");
+
+    let (mut p, media) = one_audio_track(sr, 120.0);
+    p.tracks[0].slots[0].clip.as_mut().unwrap().launch_mode = xdaw_sequencer::LaunchMode::Toggle;
+    p.tracks[0].slots[0].clip.as_mut().unwrap().quantize = ClipQuantize::Fixed(xdaw_sequencer::Quantize::None);
+    let mut rig = Rig::new(&p, &media, sr);
+    rig.handle.send(Command::LaunchSlot { track: 0, slot: 0, down: true });
+    rig.handle.send(Command::LaunchSlot { track: 0, slot: 0, down: false });
+    let (l, _) = rig.render(1_000, 256);
+    assert!(l[500].abs() > 0.1, "release ignored in toggle mode");
+    rig.handle.send(Command::LaunchSlot { track: 0, slot: 0, down: true });
+    let (l, _) = rig.render(1_000, 256);
+    assert!(l[500..].iter().all(|x| x.abs() < 1e-6), "second press stops");
+}
+
+#[test]
+fn solo_silences_other_tracks_but_not_returns() {
+    let sr = 48_000.0;
+    let (mut p, media) = one_audio_track(sr, 120.0);
+    p.add_track(TrackKind::Audio, "B");
+    let c = audio_clip(&mut p, "dc", 4.0, 120.0);
+    p.tracks[1].slots[0].clip = Some(c);
+    p.add_return("R");
+    p.tracks[1].mixer.sends_db[0] = 0.0;
+    p.tracks[0].mixer.solo = true;
+    let mut rig = Rig::new(&p, &media, sr);
+    rig.handle.send(Command::LaunchScene { slot: 0 });
+    let (l, _) = rig.render(5_000, 256);
+    // Only track A (0.5); track B and its send are muted by solo-in-place.
+    assert!((l[4_000] - 0.5).abs() < 1e-3, "{}", l[4_000]);
+}

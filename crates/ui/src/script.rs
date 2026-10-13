@@ -120,6 +120,29 @@ impl Script {
                     );
                 }
                 "tempo" => app.project.transport.bpm = num(0),
+                "mastervol" => {
+                    app.project.master.mixer.volume_db = num(0) as f32;
+                    app.label("Master Volume");
+                }
+                "stats" => {
+                    let cb = &app.rt.status.callback;
+                    let n = cb.count.load(Ordering::Relaxed);
+                    println!(
+                        "[script] stats callbacks={} mean_ms={:.4} p50_ms<={:.1} p99_ms<={:.1} p999_ms<={:.1} max_ms={:.4} budget_ms={:.4} deadline_misses={} stream_errors={} dropped_cmds={} dropped_events={} undo_depth_label={:?}",
+                        n,
+                        cb.total_ns.load(Ordering::Relaxed) as f64 / n.max(1) as f64 / 1e6,
+                        cb.percentile_ms(0.5),
+                        cb.percentile_ms(0.99),
+                        cb.percentile_ms(0.999),
+                        cb.max_ns.load(Ordering::Relaxed) as f64 / 1e6,
+                        cb.budget_ns.load(Ordering::Relaxed) as f64 / 1e6,
+                        cb.deadline_misses.load(Ordering::Relaxed),
+                        app.rt.status.stream_errors.load(Ordering::Relaxed),
+                        app.rt.status.dropped_commands.load(Ordering::Relaxed),
+                        app.rt.status.dropped_events.load(Ordering::Relaxed),
+                        app.history.undo_label()
+                    );
+                }
                 "volume" => {
                     let t = (num(0) as usize).saturating_sub(1);
                     if let Some(tr) = app.project.tracks.get_mut(t) {
