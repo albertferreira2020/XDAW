@@ -100,6 +100,9 @@ pub enum EngineEvent {
     RecordingStarted { track: u16, slot: u16, at: Beats },
     RecordingStopped { track: u16, slot: u16, at: Beats },
     AutomationOverridden { track: TrackIx },
+    /// Every live note reaching a track (Capture MIDI history). `frame` is a
+    /// free-running output frame counter that advances even while stopped.
+    LiveNote { track: u16, pitch: u8, velocity: u8, on: bool, beat: Beats, frame: u64, playing: bool },
     /// The arrangement loop wrapped.
     Looped { from: Beats, to: Beats },
 }

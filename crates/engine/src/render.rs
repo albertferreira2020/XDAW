@@ -103,6 +103,8 @@ pub struct Renderer {
     rec: Option<Producer<crate::recorder::RecMsg>>,
     /// Track currently streaming to the disk writer (one take at a time).
     rec_track: Option<usize>,
+    /// Output frames rendered since creation, independent of transport state.
+    frames_total: u64,
 }
 
 /// Pushes an event only if capacity allows (never reallocates on the audio thread).
@@ -143,6 +145,7 @@ impl Renderer {
             in_r: vec![0.0; MAX_BLOCK],
             rec: None,
             rec_track: None,
+            frames_total: 0,
         }
     }
 
@@ -721,6 +724,14 @@ impl Renderer {
                 if to_us {
                     push_ev(&mut t.events, NoteEvent { offset: 0, kind });
                     record_live(t, ti, kind, b0, &mut sink);
+                    let (pitch, velocity, on) = match kind {
+                        NoteKind::On { pitch, velocity } => (pitch, velocity, velocity > 0),
+                        NoteKind::Off { pitch } => (pitch, 0, false),
+                        _ => (0, 0, false),
+                    };
+                    if matches!(kind, NoteKind::On { .. } | NoteKind::Off { .. }) {
+                        sink.push(EngineEvent::LiveNote { track: ti as u16, pitch, velocity, on, beat: b0, frame: self.frames_total + at as u64, playing: self.playing });
+                    }
                 }
             }
             if span.playing {
@@ -808,6 +819,7 @@ impl Renderer {
         if self.playing && self.include_metronome && (self.metronome || counting) {
             render_click(&mut self.click, &span, sig, ml, mr, ctx.sample_rate);
         }
+        self.frames_total += n as u64;
         if self.playing {
             self.sample += n as i64;
         }

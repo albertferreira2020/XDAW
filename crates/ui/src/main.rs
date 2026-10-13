@@ -3,6 +3,7 @@
 mod app;
 mod arrangement;
 mod browser;
+mod capture;
 mod clip_editor;
 mod devices;
 mod dialogs;

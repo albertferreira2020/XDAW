@@ -171,6 +171,9 @@ fn control_bar(app: &mut XdawApp, ui: &mut Ui) {
     if toggle(ui, session_rec, "S.Rec", theme::RECORD, 38.0).on_hover_text("Session Record: record/overdub on armed tracks").clicked() {
         app.session_record();
     }
+    if toggle(ui, false, "Capture", theme::ACCENT, 50.0).on_hover_text("Capture MIDI: turn what you just played into a clip").clicked() {
+        app.capture_midi();
+    }
     let released = (0..app.project.tracks.len()).any(|t| !app.track_status(t).arrangement_active.load(Ordering::Relaxed));
     let lit = released || app.automation_overridden;
     if toggle(ui, lit, "↺ Arr", theme::QUEUED, 40.0).on_hover_text("Back to Arrangement").clicked() {

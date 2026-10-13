@@ -72,7 +72,7 @@ Platform: macOS 26.6.2, Apple M5, built-in output at 48 kHz. Windows/Linux: **no
 | Audio recording from input, monitoring In/Auto/Off, written by disk thread | L10 §16 | Verified with simulated input; real microphone unverified | `audio_session_record_streams_input_to_wav` |
 | Input clipping indicator | prompt | Partial | input peak tracked; no dedicated UI indicator yet |
 | MIDI mapping / key mapping (learn mode) | L10 §27 | Implemented, unverified | |
-| Capture MIDI (retrospective) | L10 §16.8 | Not implemented | proposal: 8-minute rolling buffer per armed MIDI track |
+| Capture MIDI (retrospective) | L10 §16.8 | Verified (capture logic); UI button unverified | `crates/ui/src/capture.rs` tests. History: last 2048 notes / 10 min per track; phrase = notes without a gap > 2 bars; keeps song positions if played with transport running, else current tempo from the first note; no tempo detection |
 
 ## Mixer, instruments and effects
 

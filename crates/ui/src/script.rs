@@ -13,12 +13,45 @@ pub struct Script {
     next: usize,
     wait_until: f64,
     pending_shot: bool,
+    /// Synthetic input, one batch per frame, injected through `raw_input_hook`.
+    pub inject: std::collections::VecDeque<Vec<egui::Event>>,
+}
+
+fn pointer(x: f32, y: f32) -> egui::Event {
+    egui::Event::PointerMoved(egui::pos2(x, y))
+}
+
+fn button(x: f32, y: f32, pressed: bool, modifiers: egui::Modifiers) -> egui::Event {
+    egui::Event::PointerButton { pos: egui::pos2(x, y), button: egui::PointerButton::Primary, pressed, modifiers }
+}
+
+fn parse_key(spec: &str) -> Option<(egui::Key, egui::Modifiers)> {
+    let mut mods = egui::Modifiers::NONE;
+    let mut key = None;
+    for part in spec.split('+') {
+        match part.to_ascii_lowercase().as_str() {
+            "cmd" => {
+                mods.command = true;
+                mods.mac_cmd = true;
+            }
+            "shift" => mods.shift = true,
+            "alt" => mods.alt = true,
+            other => key = egui::Key::from_name(if other.len() == 1 { part } else { part }).or_else(|| egui::Key::from_name(&other.to_ascii_uppercase())),
+        }
+    }
+    key.map(|k| (k, mods))
 }
 
 impl Script {
     pub fn from_env() -> Option<Self> {
         let s = std::env::var("XDAW_SCRIPT").ok()?;
-        Some(Self { steps: s.split(';').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(), next: 0, wait_until: 0.0, pending_shot: false })
+        Some(Self {
+            steps: s.split(';').map(|x| x.trim().to_string()).filter(|x| !x.is_empty()).collect(),
+            next: 0,
+            wait_until: 0.0,
+            pending_shot: false,
+            inject: Default::default(),
+        })
     }
 
     pub fn run(&mut self, app: &mut XdawApp, ctx: &egui::Context) {
@@ -41,7 +74,7 @@ impl Script {
             }
             self.pending_shot = false;
         }
-        if self.pending_shot || now < self.wait_until {
+        if self.pending_shot || now < self.wait_until || !self.inject.is_empty() {
             ctx.request_repaint();
             return;
         }
@@ -66,6 +99,63 @@ impl Script {
                     ctx.request_repaint();
                     return;
                 }
+                "click" | "dclick" | "rclick" => {
+                    let (x, y) = (num(0) as f32, num(1) as f32);
+                    let mods = egui::Modifiers { shift: args.contains(&"shift"), alt: args.contains(&"alt"), command: args.contains(&"cmd"), mac_cmd: args.contains(&"cmd"), ..Default::default() };
+                    let times = if cmd == "dclick" { 2 } else { 1 };
+                    self.inject.push_back(vec![pointer(x, y)]);
+                    for _ in 0..times {
+                        if cmd == "rclick" {
+                            self.inject.push_back(vec![egui::Event::PointerButton { pos: egui::pos2(x, y), button: egui::PointerButton::Secondary, pressed: true, modifiers: mods }]);
+                            self.inject.push_back(vec![egui::Event::PointerButton { pos: egui::pos2(x, y), button: egui::PointerButton::Secondary, pressed: false, modifiers: mods }]);
+                        } else {
+                            self.inject.push_back(vec![button(x, y, true, mods)]);
+                            self.inject.push_back(vec![button(x, y, false, mods)]);
+                        }
+                    }
+                    self.inject.push_back(vec![]);
+                    ctx.request_repaint();
+                    return;
+                }
+                "drag" => {
+                    let (x0, y0, x1, y1) = (num(0) as f32, num(1) as f32, num(2) as f32, num(3) as f32);
+                    let steps = 12;
+                    self.inject.push_back(vec![pointer(x0, y0)]);
+                    self.inject.push_back(vec![button(x0, y0, true, egui::Modifiers::NONE)]);
+                    for i in 1..=steps {
+                        let t = i as f32 / steps as f32;
+                        self.inject.push_back(vec![pointer(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t)]);
+                    }
+                    self.inject.push_back(vec![button(x1, y1, false, egui::Modifiers::NONE)]);
+                    self.inject.push_back(vec![]);
+                    ctx.request_repaint();
+                    return;
+                }
+                "key" => {
+                    if let Some((key, modifiers)) = args.first().and_then(|k| parse_key(k)) {
+                        self.inject.push_back(vec![egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers }]);
+                        self.inject.push_back(vec![egui::Event::Key { key, physical_key: None, pressed: false, repeat: false, modifiers }]);
+                        self.inject.push_back(vec![]);
+                    } else {
+                        println!("[script] bad key {:?}", args);
+                    }
+                    ctx.request_repaint();
+                    return;
+                }
+                "notes" => {
+                    let n = app.selected_clip().map(|c| match &c.content {
+                        xdaw_project::ClipContent::Midi { notes } => format!("{:?}", notes.iter().map(|n| (n.pitch, n.start, n.length)).collect::<Vec<_>>()),
+                        _ => "audio".into(),
+                    });
+                    println!("[script] notes {}", n.unwrap_or_else(|| "no clip".into()));
+                }
+                "arr" => {
+                    let t = (num(0) as usize).saturating_sub(1);
+                    if let Some(tr) = app.project.tracks.get(t) {
+                        println!("[script] arr track {} {:?}", t + 1, tr.arrangement.iter().map(|c| (c.start, c.length, c.offset)).collect::<Vec<_>>());
+                        println!("[script] automation track {} {:?}", t + 1, tr.automation.iter().map(|l| (l.target, l.points.len())).collect::<Vec<_>>());
+                    }
+                }
                 "view" => app.view = if args.first() == Some(&"arrangement") { View::Arrangement } else { View::Session },
                 "detail" => app.detail = if args.first() == Some(&"clip") { Detail::Clip } else { Detail::Devices },
                 "scene" => crate::session::launch_scene(app, (num(0) as usize).saturating_sub(1)),
@@ -80,6 +170,7 @@ impl Script {
                     app.sel.clip = Some(ClipLoc::Slot { track: t, slot: s });
                 }
                 "play" => app.rt.send(Command::Play),
+                "capture" => app.capture_midi(),
                 "stop" => app.rt.send(Command::Stop),
                 "record" => app.toggle_arrangement_record(),
                 "back" => app.rt.send(Command::BackToArrangement),

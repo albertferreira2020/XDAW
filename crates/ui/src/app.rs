@@ -107,6 +107,7 @@ pub struct XdawApp {
     pub pending_launch_scene: Option<usize>,
     last_frame: Instant,
     script: Option<crate::script::Script>,
+    pub capture: HashMap<usize, crate::capture::History>,
 }
 
 const AUTOSAVE_EVERY: Duration = Duration::from_secs(30);
@@ -150,6 +151,7 @@ impl XdawApp {
             pending_launch_scene: None,
             last_frame: Instant::now(),
             script: crate::script::Script::from_env(),
+            capture: HashMap::new(),
         };
         // Crash recovery for an unsaved session.
         if open.is_none() {
@@ -582,6 +584,10 @@ impl XdawApp {
                 let _ = slot;
             }
             EngineEvent::AutomationOverridden { .. } => self.automation_overridden = true,
+            EngineEvent::LiveNote { track, pitch, velocity, on, beat, frame, playing } => {
+                let sr = self.rt.settings.sample_rate as f64;
+                self.capture.entry(track as usize).or_default().note(pitch, velocity, on, beat, frame, playing, sr);
+            }
             EngineEvent::Looped { .. } => {}
         }
     }
@@ -709,6 +715,47 @@ impl XdawApp {
                 self.rt.send(Command::SessionRecord { track: t as u16, slot: slot as u16, on: true });
             }
         }
+    }
+
+    /// Capture MIDI: the latest played phrase on the selected (or first armed) MIDI track.
+    pub fn capture_midi(&mut self) {
+        let track = match self.sel.track {
+            Some(TrackRef::Track(t)) if self.project.tracks[t].kind == TrackKind::Midi => Some(t),
+            _ => self.project.tracks.iter().position(|t| t.kind == TrackKind::Midi && t.mixer.arm),
+        };
+        let Some(t) = track else {
+            self.status_line = "Capture: select or arm a MIDI track".into();
+            return;
+        };
+        let bar = self.project.transport.time_signature.bar_beats();
+        let sr = self.rt.settings.sample_rate as f64;
+        let Some((notes, length)) = self.capture.get(&t).and_then(|h| h.capture(self.project.transport.bpm, sr, bar)) else {
+            self.status_line = "Capture: nothing played on this track yet".into();
+            return;
+        };
+        let Some(slot) = (self.sel.scene..self.project.scenes.len()).find(|&s| self.project.tracks[t].slots[s].clip.is_none()) else {
+            self.status_line = "Capture: no empty slot below the selected scene".into();
+            return;
+        };
+        let clip = Clip {
+            id: self.project.alloc_id(),
+            name: "Captured".into(),
+            color: self.project.tracks[t].color,
+            content: ClipContent::Midi { notes },
+            region: ClipRegion::looped(length),
+            launch_mode: Default::default(),
+            quantize: Default::default(),
+            legato: false,
+            gain_db: 0.0,
+            transpose: 0,
+            follow: Default::default(),
+        };
+        self.project.tracks[t].slots[slot].clip = Some(clip);
+        self.capture.remove(&t);
+        self.sel.clip = Some(ClipLoc::Slot { track: t, slot });
+        self.detail = Detail::Clip;
+        self.label("Capture MIDI");
+        self.status_line = format!("Captured into track {} slot {}", t + 1, slot + 1);
     }
 
     // ------------------------------------------------------------ keyboard
@@ -1077,6 +1124,12 @@ impl eframe::App for XdawApp {
         self.autosave();
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.title()));
         ctx.request_repaint_after(Duration::from_millis(if self.playing() { 16 } else { 50 }));
+    }
+
+    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if let Some(batch) = self.script.as_mut().and_then(|s| s.inject.pop_front()) {
+            raw.events.extend(batch);
+        }
     }
 
     fn on_exit(&mut self) {
