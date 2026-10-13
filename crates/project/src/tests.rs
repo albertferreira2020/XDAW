@@ -158,3 +158,18 @@ fn autosave_newer_than_project_is_offered_for_recovery() {
     io::discard_autosave(Some(&path));
     assert_eq!(io::recovery_candidate(Some(&path)), None);
 }
+
+#[test]
+fn macros_drive_mapped_parameters_in_normalised_space() {
+    let mut p = sample_project();
+    let t = &mut p.tracks[0];
+    let synth = t.devices[0].id;
+    t.ensure_macros();
+    t.macros[0].mappings.push(MacroMapping { device: synth, param: 5, min: 100.0, max: 10_000.0 }); // cutoff (log)
+    t.macros[0].mappings.push(MacroMapping { device: synth, param: 6, min: 0.9, max: 0.0 }); // inverted resonance
+    t.macros[0].value = 0.5;
+    t.apply_macros();
+    assert!((t.devices[0].params[5] - 1000.0).abs() < 1.0, "log midpoint: {}", t.devices[0].params[5]);
+    assert!((t.devices[0].params[6] - 0.45).abs() < 1e-4);
+    assert_eq!(t.macros.len(), MACROS);
+}

@@ -19,6 +19,9 @@ pub fn show(app: &mut XdawApp, ui: &mut Ui) {
                 ui.label(RichText::new(track_name).strong());
                 ui.label(RichText::new("Drop devices here →").size(10.0).color(theme::TEXT_DIM));
             });
+            if !app.project.track(r).devices.is_empty() {
+                macros(app, ui, r);
+            }
             let n = app.project.track(r).devices.len();
             let mut action = None;
             for i in 0..n {
@@ -40,6 +43,63 @@ pub fn show(app: &mut XdawApp, ui: &mut Ui) {
             if let Some(a) = action {
                 apply(app, r, a);
             }
+        });
+    });
+}
+
+/// Rack-style macro controls: 8 knobs, each mapped to any device parameters.
+fn macros(app: &mut XdawApp, ui: &mut Ui, r: TrackRef) {
+    let frame = egui::Frame::new().fill(theme::PANEL_DARK).inner_margin(6.0).corner_radius(3.0).stroke(egui::Stroke::new(1.0, theme::ACCENT));
+    frame.show(ui, |ui| {
+        ui.set_min_height(180.0);
+        ui.vertical(|ui| {
+            ui.label(RichText::new("Macros").strong());
+            egui::Grid::new(("macros", app.project.track(r).id)).spacing(vec2(6.0, 2.0)).show(ui, |ui| {
+                for i in 0..xdaw_project::MACROS {
+                    let m = app.project.track(r).macros.get(i).cloned().unwrap_or(xdaw_project::Macro { name: format!("Macro {}", i + 1), value: 0.0, mappings: vec![] });
+                    ui.vertical(|ui| {
+                        ui.set_width(58.0);
+                        ui.label(RichText::new(&m.name).size(9.5).color(if m.mappings.is_empty() { theme::TEXT_DIM } else { theme::ACCENT }));
+                        let mut v = m.value;
+                        let resp = mixer::knob(ui, &mut v, 0.0, false, theme::ACCENT).on_hover_text(format!("{} mapping(s); right-click to map", m.mappings.len()));
+                        if resp.changed() {
+                            let t = app.project.track_mut(r);
+                            t.ensure_macros();
+                            t.macros[i].value = v;
+                            t.apply_macros();
+                            app.label("Macro");
+                        }
+                        resp.context_menu(|ui| {
+                            let devices = app.project.track(r).devices.clone();
+                            for d in &devices {
+                                ui.menu_button(d.kind.name(), |ui| {
+                                    for (pi, desc) in d.kind.params().iter().enumerate() {
+                                        if ui.button(desc.name).clicked() {
+                                            let t = app.project.track_mut(r);
+                                            t.ensure_macros();
+                                            t.macros[i].mappings.push(xdaw_project::MacroMapping { device: d.id, param: pi, min: desc.min, max: desc.max });
+                                            if t.macros[i].name.starts_with("Macro ") {
+                                                t.macros[i].name = desc.name.to_string();
+                                            }
+                                            app.label("Map Macro");
+                                            ui.close();
+                                        }
+                                    }
+                                });
+                            }
+                            if !m.mappings.is_empty() && ui.button("Clear mappings").clicked() {
+                                app.project.track_mut(r).macros[i].mappings.clear();
+                                app.label("Clear Macro");
+                                ui.close();
+                            }
+                        });
+                        ui.label(RichText::new(format!("{:.0}%", m.value * 100.0)).size(9.5));
+                    });
+                    if i % 4 == 3 {
+                        ui.end_row();
+                    }
+                }
+            });
         });
     });
 }

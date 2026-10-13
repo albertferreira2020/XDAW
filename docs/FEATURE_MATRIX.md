@@ -89,7 +89,7 @@ Platform: macOS 26.6.2, Apple M5, built-in output at 48 kHz. Windows/Linux: **no
 | Utility, EQ Three-Band, Filter, Compressor, Echo Delay (synced), Room Reverb | Own | Verified (signal tests) | silence, gain, filter response, compressor curve, delay timing, reverb decay, NaN recovery |
 | Device order, bypass, presets (JSON, id-keyed) | prompt | Implemented, unverified (UI) | |
 | Parameter smoothing | prompt | Verified | `smoothing_reaches_target_and_bounds_step` |
-| Racks with macros | L10 | Not implemented | |
+| Racks with macros | L10 | Partial (macros only) | `macros_drive_mapped_parameters_in_normalised_space` |
 
 ## Automation and warping
 
@@ -124,7 +124,8 @@ Platform: macOS 26.6.2, Apple M5, built-in output at 48 kHz. Windows/Linux: **no
 | Feature | Status |
 | --- | --- |
 | Flatten a track's Arrangement to a new audio track (post-device render) | Implemented, unverified (UI) |
-| Racks/macros, multi-clip MIDI editing, reversible Freeze | Not implemented |
+| Macro controls (8 per track, each mapped to any device parameters with ranges) | Partial: verified (model); UI unverified; no rack chains, no macro automation |
+| Instrument/effect rack chains, multi-clip MIDI editing, reversible Freeze | Not implemented |
 | VST3 / Audio Unit hosting | Not implemented (`plugin-host` placeholder) |
 | Max for Live, Push | Not implemented; require their own compatibility projects |
 

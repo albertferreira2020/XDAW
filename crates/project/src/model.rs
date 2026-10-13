@@ -109,6 +109,60 @@ pub struct Track {
     /// Group track this track feeds (one level of grouping).
     #[serde(default)]
     pub group: Option<Id>,
+    /// Macro controls (rack-style), each driving device parameters.
+    #[serde(default)]
+    pub macros: Vec<Macro>,
+}
+
+pub const MACROS: usize = 8;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MacroMapping {
+    pub device: Id,
+    pub param: usize,
+    /// Parameter value at macro 0 and at macro 1 (native units; may be inverted).
+    pub min: f32,
+    pub max: f32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Macro {
+    pub name: String,
+    /// Normalised position 0..1.
+    pub value: f32,
+    pub mappings: Vec<MacroMapping>,
+}
+
+impl Track {
+    /// Writes every macro's mapped parameters from its value (call after a macro change).
+    pub fn apply_macros(&mut self) {
+        for m in &self.macros {
+            for map in &m.mappings {
+                if let Some(d) = self.devices.iter_mut().find(|d| d.id == map.device) {
+                    if let Some(desc) = d.kind.params().get(map.param) {
+                        // Interpolate in the parameter's normalised space so log parameters sweep naturally.
+                        let (a, b) = (desc.to_normalized(map.min), desc.to_normalized(map.max));
+                        let v = desc.from_normalized(a + (b - a) * m.value.clamp(0.0, 1.0));
+                        if d.params.len() <= map.param {
+                            d.params.resize(desc_len(d.kind), 0.0);
+                        }
+                        d.params[map.param] = v;
+                    }
+                }
+            }
+        }
+    }
+
+    pub fn ensure_macros(&mut self) {
+        while self.macros.len() < MACROS {
+            let n = self.macros.len() + 1;
+            self.macros.push(Macro { name: format!("Macro {n}"), value: 0.0, mappings: vec![] });
+        }
+    }
+}
+
+fn desc_len(kind: DeviceKind) -> usize {
+    kind.params().len()
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -606,6 +660,7 @@ impl Track {
             arrangement: vec![],
             automation: vec![],
             group: None,
+            macros: vec![],
         }
     }
 
