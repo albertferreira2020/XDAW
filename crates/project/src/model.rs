@@ -1,12 +1,12 @@
 //! Project data model. Owned by the UI thread; the engine receives compiled snapshots.
 
-use ost_dsp::DeviceKind;
-use ost_sequencer::{Beats, ClipQuantize, ClipRegion, LaunchMode, Quantize, TimeSignature};
+use xdaw_dsp::DeviceKind;
+use xdaw_sequencer::{Beats, ClipQuantize, ClipRegion, LaunchMode, Quantize, TimeSignature};
 use serde::{Deserialize, Serialize};
 
 pub type Id = u64;
 
-pub const FORMAT_NAME: &str = "ostinato-project";
+pub const FORMAT_NAME: &str = "xdaw-project";
 pub const FORMAT_VERSION: u32 = 1;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -130,7 +130,7 @@ impl DeviceState {
             params: kind.params().iter().map(|p| p.default).collect(),
             bypass: false,
             sample: None,
-            pads: if kind == DeviceKind::DrumRack { vec![None; ost_dsp::instruments::PADS] } else { vec![] },
+            pads: if kind == DeviceKind::DrumRack { vec![None; xdaw_dsp::instruments::PADS] } else { vec![] },
             preset_name: None,
         }
     }

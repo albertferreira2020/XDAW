@@ -116,6 +116,10 @@ pub struct Synth {
 }
 
 impl Synth {
+    pub fn param_values(&self) -> &[f32] {
+        &self.params
+    }
+
     pub fn new(sr: f32) -> Self {
         let mut params = [0.0; SYNTH_PARAMS.len()];
         for (p, d) in params.iter_mut().zip(SYNTH_PARAMS) {
@@ -296,6 +300,10 @@ pub struct Sampler {
 }
 
 impl Sampler {
+    pub fn param_values(&self) -> &[f32] {
+        &self.params
+    }
+
     pub fn new(sr: f32, sample: Option<Arc<SampleData>>) -> Self {
         let mut params = [0.0; SAMPLER_PARAMS.len()];
         for (p, d) in params.iter_mut().zip(SAMPLER_PARAMS) {
@@ -455,6 +463,10 @@ pub struct DrumRack {
 }
 
 impl DrumRack {
+    pub fn param_values(&self) -> &[f32] {
+        &self.params
+    }
+
     pub fn new(sr: f32, samples: [Option<Arc<SampleData>>; PADS]) -> Self {
         let mut params = [0.0; PADS * PAD_PARAMS_EACH];
         for (p, d) in params.iter_mut().zip(DRUM_PARAMS) {

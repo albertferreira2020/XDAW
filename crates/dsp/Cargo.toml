@@ -1,5 +1,5 @@
 [package]
-name = "ost-dsp"
+name = "xdaw-dsp"
 version.workspace = true
 edition.workspace = true
 license.workspace = true

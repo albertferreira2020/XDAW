@@ -1,12 +1,12 @@
 use crate::io::{self, ProjectError};
 use crate::model::*;
 use crate::History;
-use ost_dsp::DeviceKind;
-use ost_sequencer::ClipRegion;
+use xdaw_dsp::DeviceKind;
+use xdaw_sequencer::ClipRegion;
 use std::path::PathBuf;
 
 fn temp_dir(name: &str) -> PathBuf {
-    let d = std::env::temp_dir().join(format!("ost-project-{name}-{}", std::process::id()));
+    let d = std::env::temp_dir().join(format!("xdaw-project-{name}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&d);
     std::fs::create_dir_all(&d).unwrap();
     d
@@ -48,7 +48,7 @@ fn round_trip_preserves_everything() {
     let p = sample_project();
     assert!(p.validate().is_empty(), "{:?}", p.validate());
     let dir = temp_dir("roundtrip");
-    let path = dir.join("song.ostp");
+    let path = dir.join("song.xdaw");
     io::save(&p, &path).unwrap();
     let back = io::load(&path).unwrap();
     assert_eq!(p, back);
@@ -58,14 +58,14 @@ fn round_trip_preserves_everything() {
 #[test]
 fn invalid_and_future_files_are_rejected_with_reasons() {
     let dir = temp_dir("invalid");
-    let path = dir.join("bad.ostp");
+    let path = dir.join("bad.xdaw");
     std::fs::write(&path, b"{ not json").unwrap();
     assert!(matches!(io::load(&path), Err(ProjectError::Parse { .. })));
     let mut v = serde_json::to_value(sample_project()).unwrap();
     v["version"] = 99.into();
     std::fs::write(&path, serde_json::to_vec(&v).unwrap()).unwrap();
     assert!(matches!(io::load(&path), Err(ProjectError::Unsupported { version: 99, .. })));
-    assert!(matches!(io::load(&dir.join("absent.ostp")), Err(ProjectError::Read { .. })));
+    assert!(matches!(io::load(&dir.join("absent.xdaw")), Err(ProjectError::Read { .. })));
 }
 
 #[test]
@@ -144,7 +144,7 @@ fn missing_media_reported_and_collect_copies_into_project() {
 #[test]
 fn autosave_newer_than_project_is_offered_for_recovery() {
     let dir = temp_dir("autosave");
-    let path = dir.join("song.ostp");
+    let path = dir.join("song.xdaw");
     let p = sample_project();
     io::save(&p, &path).unwrap();
     assert_eq!(io::recovery_candidate(Some(&path)), None);

@@ -134,6 +134,32 @@ impl Device {
         }
     }
 
+    pub fn param_values(&self) -> &[f32] {
+        match self {
+            Device::PolySynth(d) => d.param_values(),
+            Device::Sampler(d) => d.param_values(),
+            Device::DrumRack(d) => d.param_values(),
+            Device::Gain(d) => d.param_values(),
+            Device::Eq3(d) => d.param_values(),
+            Device::Filter(d) => d.param_values(),
+            Device::Compressor(d) => d.param_values(),
+            Device::Delay(d) => d.param_values(),
+            Device::Reverb(d) => d.param_values(),
+        }
+    }
+
+    /// Applies every parameter of `other` (same kind) to self; no allocation.
+    pub fn copy_params_from(&mut self, other: &Device) {
+        if self.kind() != other.kind() {
+            return;
+        }
+        let n = other.param_values().len();
+        for i in 0..n {
+            let v = other.param_values()[i];
+            self.set_param(i, v);
+        }
+    }
+
     /// Instruments add their output to `l`/`r`; effects transform `l`/`r` in place.
     pub fn process(&mut self, events: &[NoteEvent], l: &mut [f32], r: &mut [f32], ctx: &Ctx) {
         match self {

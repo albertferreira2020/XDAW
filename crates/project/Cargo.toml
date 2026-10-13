@@ -1,13 +1,13 @@
 [package]
-name = "ost-project"
+name = "xdaw-project"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
 [dependencies]
-ost-dsp.workspace = true
-ost-sequencer.workspace = true
+xdaw-dsp.workspace = true
+xdaw-sequencer.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

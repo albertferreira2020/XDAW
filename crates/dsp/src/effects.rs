@@ -21,6 +21,10 @@ pub struct GainFx {
 }
 
 impl GainFx {
+    pub fn param_values(&self) -> &[f32] {
+        &self.params
+    }
+
     pub fn new(sr: f32) -> Self {
         let (pl, pr) = pan_gains(0.0);
         let norm = std::f32::consts::SQRT_2;
@@ -75,6 +79,10 @@ pub struct Eq3 {
 }
 
 impl Eq3 {
+    pub fn param_values(&self) -> &[f32] {
+        &self.params
+    }
+
     pub fn new(sr: f32) -> Self {
         let params: [f32; 7] = std::array::from_fn(|i| EQ_PARAMS[i].default);
         let smoothed = std::array::from_fn(|i| Smoothed::new(params[i], sr, 30.0));
@@ -139,6 +147,7 @@ pub const FILTER_PARAMS: &[ParamDesc] = &[
 ];
 
 pub struct FilterFx {
+    params: [f32; 3],
     mode: SvfMode,
     cutoff: Smoothed,
     resonance: f32,
@@ -147,13 +156,18 @@ pub struct FilterFx {
 }
 
 impl FilterFx {
+    pub fn param_values(&self) -> &[f32] {
+        &self.params
+    }
+
     pub fn new(sr: f32) -> Self {
-        Self { mode: SvfMode::LowPass, cutoff: Smoothed::new(18_000.0, sr, 30.0), resonance: 0.1, filters: [Svf::default(); 2], sr }
+        Self { params: [0.0, 18_000.0, 0.1], mode: SvfMode::LowPass, cutoff: Smoothed::new(18_000.0, sr, 30.0), resonance: 0.1, filters: [Svf::default(); 2], sr }
     }
 
     pub fn set_param(&mut self, i: usize, v: f32) {
         let Some(d) = FILTER_PARAMS.get(i) else { return };
         let v = d.clamp(v);
+        self.params[i] = v;
         match i {
             0 => {
                 self.mode = match v as u32 {
@@ -205,6 +219,10 @@ pub struct Compressor {
 }
 
 impl Compressor {
+    pub fn param_values(&self) -> &[f32] {
+        &self.params
+    }
+
     pub fn new(sr: f32) -> Self {
         let params = std::array::from_fn(|i| COMP_PARAMS[i].default);
         let mut c = Self { params, env_db: 0.0, attack: 0.0, release: 0.0, makeup: Smoothed::new(1.0, sr, 20.0), sr, gain_reduction_db: 0.0 };
@@ -287,6 +305,10 @@ pub struct Delay {
 pub const MAX_DELAY_SECONDS: f32 = 4.0;
 
 impl Delay {
+    pub fn param_values(&self) -> &[f32] {
+        &self.params
+    }
+
     pub fn new(sr: f32) -> Self {
         let n = (sr * MAX_DELAY_SECONDS) as usize + 4;
         let params = std::array::from_fn(|i| DELAY_PARAMS[i].default);
@@ -430,6 +452,10 @@ const ALLPASS_TUNING: [usize; 4] = [556, 441, 341, 225];
 const STEREO_SPREAD: usize = 23;
 
 impl Reverb {
+    pub fn param_values(&self) -> &[f32] {
+        &self.params
+    }
+
     pub fn new(sr: f32) -> Self {
         let scale = sr / 44_100.0;
         let mk = |spread: usize| -> (Vec<Comb>, Vec<Allpass>) {

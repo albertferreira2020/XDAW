@@ -5,7 +5,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-pub const EXTENSION: &str = "ostp";
+pub const EXTENSION: &str = "xdaw";
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProjectError {
@@ -72,7 +72,7 @@ pub fn parse(path: &Path, bytes: &[u8]) -> Result<Project, ProjectError> {
     serde_json::from_slice(bytes).map_err(parse_err)
 }
 
-/// Autosave lives next to the project (`song.ostp` → `song.ostp.autosave`), or in
+/// Autosave lives next to the project (`song.xdaw` → `song.xdaw.autosave`), or in
 /// the app support directory for unsaved projects.
 pub fn autosave_path(project_path: Option<&Path>) -> PathBuf {
     match project_path {
@@ -81,16 +81,16 @@ pub fn autosave_path(project_path: Option<&Path>) -> PathBuf {
             s.push(".autosave");
             PathBuf::from(s)
         }
-        None => app_support_dir().join("untitled.ostp.autosave"),
+        None => app_support_dir().join("untitled.xdaw.autosave"),
     }
 }
 
 pub fn app_support_dir() -> PathBuf {
     let home = std::env::var_os("HOME").map(PathBuf::from).unwrap_or_else(std::env::temp_dir);
     if cfg!(target_os = "macos") {
-        home.join("Library/Application Support/Ostinato")
+        home.join("Library/Application Support/XDAW")
     } else {
-        home.join(".local/share/ostinato")
+        home.join(".local/share/xdaw")
     }
 }
 

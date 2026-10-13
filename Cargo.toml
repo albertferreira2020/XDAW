@@ -9,12 +9,12 @@ license = "MIT OR Apache-2.0"
 publish = false
 
 [workspace.dependencies]
-ost-sequencer = { path = "crates/sequencer" }
-ost-dsp = { path = "crates/dsp" }
-ost-midi = { path = "crates/midi" }
-ost-project = { path = "crates/project" }
-ost-engine = { path = "crates/engine" }
-ost-plugin-host = { path = "crates/plugin-host" }
+xdaw-sequencer = { path = "crates/sequencer" }
+xdaw-dsp = { path = "crates/dsp" }
+xdaw-midi = { path = "crates/midi" }
+xdaw-project = { path = "crates/project" }
+xdaw-engine = { path = "crates/engine" }
+xdaw-plugin-host = { path = "crates/plugin-host" }
 
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

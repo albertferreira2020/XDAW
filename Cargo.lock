@@ -15,47 +15,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 
 [[package]]
-name = "ost-dsp"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "ost-engine"
-version = "0.1.0"
-
-[[package]]
-name = "ost-midi"
-version = "0.1.0"
-
-[[package]]
-name = "ost-plugin-host"
-version = "0.1.0"
-
-[[package]]
-name = "ost-project"
-version = "0.1.0"
-dependencies = [
- "ost-dsp",
- "ost-sequencer",
- "serde",
- "serde_json",
- "thiserror",
-]
-
-[[package]]
-name = "ost-sequencer"
-version = "0.1.0"
-dependencies = [
- "serde",
-]
-
-[[package]]
-name = "ost-ui"
-version = "0.1.0"
-
-[[package]]
 name = "proc-macro2"
 version = "1.0.107"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -152,6 +111,47 @@ name = "unicode-ident"
 version = "1.0.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2c754d6c33795a1c324727428e5a7dedb5b06195f9890bdbcba760d3e246563"
+
+[[package]]
+name = "xdaw-dsp"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "xdaw-engine"
+version = "0.1.0"
+
+[[package]]
+name = "xdaw-midi"
+version = "0.1.0"
+
+[[package]]
+name = "xdaw-plugin-host"
+version = "0.1.0"
+
+[[package]]
+name = "xdaw-project"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror",
+ "xdaw-dsp",
+ "xdaw-sequencer",
+]
+
+[[package]]
+name = "xdaw-sequencer"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "xdaw-ui"
+version = "0.1.0"
 
 [[package]]
 name = "zmij"

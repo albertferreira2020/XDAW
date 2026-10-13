@@ -50,7 +50,7 @@ All unknowns require a Live 10 installation for controlled experiments
 
 ## Consequence for implementation
 
-- `ost_sequencer::Quantize::next_boundary`, `TrackLauncher` implement 1–7 and I1–I6.
+- `xdaw_sequencer::Quantize::next_boundary`, `TrackLauncher` implement 1–7 and I1–I6.
 - The engine processes launch transitions at exact sample offsets inside the audio block
   (sub-block splitting), never on UI timers.
 - Scene launch: clip slot → launch; empty slot with stop button → stop; empty slot without stop
