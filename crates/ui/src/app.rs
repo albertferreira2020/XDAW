@@ -497,6 +497,7 @@ impl XdawApp {
         if self.media.poll() {
             self.media_gen += 1;
         }
+        self.request_stretches();
     }
 
     fn on_event(&mut self, e: EngineEvent) {
@@ -713,6 +714,26 @@ impl XdawApp {
                 self.rt.send(Command::SessionRecord { track: t as u16, slot: playing as u16, on: true });
             } else if let Some(slot) = (scene..tr.slots.len()).find(|&s| tr.slots[s].clip.is_none()) {
                 self.rt.send(Command::SessionRecord { track: t as u16, slot: slot as u16, on: true });
+            }
+        }
+    }
+
+    /// Keeps pitch-preserving renderings for Stretch clips at the current tempo.
+    fn request_stretches(&mut self) {
+        let bpm = self.project.transport.bpm;
+        let mut jobs = vec![];
+        for t in &self.project.tracks {
+            for c in t.slots.iter().filter_map(|s| s.clip.as_ref()).chain(t.arrangement.iter().map(|a| &a.clip)) {
+                if let ClipContent::Audio(a) = &c.content {
+                    if a.warp == WarpMode::Stretch && (a.source_bpm - bpm).abs() > 1e-6 {
+                        jobs.push((stretch_key(&a.media.path, a.source_bpm, bpm), a.media.path.clone(), a.source_bpm / bpm));
+                    }
+                }
+            }
+        }
+        for (key, base, ratio) in jobs {
+            if self.media.request_stretch(&key, &base, ratio) {
+                self.status_line = format!("Stretching audio for {bpm:.2} BPM…");
             }
         }
     }

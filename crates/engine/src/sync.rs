@@ -26,6 +26,8 @@ struct TrackKey {
 
 #[derive(Clone, Debug, PartialEq)]
 struct StructureKey {
+    /// Tempo, when any clip uses pitch-preserving stretch (its rendering depends on tempo).
+    stretch_bpm: Option<u64>,
     tracks: Vec<TrackKey>,
     returns: Vec<TrackKey>,
     master: TrackKey,
@@ -50,7 +52,13 @@ fn track_key(t: &Track) -> TrackKey {
 }
 
 fn structure(p: &Project) -> StructureKey {
+    let uses_stretch = p.tracks.iter().any(|t| {
+        t.slots.iter().filter_map(|s| s.clip.as_ref()).chain(t.arrangement.iter().map(|a| &a.clip)).any(|c| {
+            matches!(&c.content, xdaw_project::ClipContent::Audio(a) if a.warp == xdaw_project::WarpMode::Stretch)
+        })
+    });
     StructureKey {
+        stretch_bpm: uses_stretch.then_some(p.transport.bpm.to_bits()),
         tracks: p.tracks.iter().map(track_key).collect(),
         returns: p.returns.iter().map(track_key).collect(),
         master: track_key(&p.master),
@@ -107,13 +115,13 @@ impl Reconciler {
             if let TrackRef::Track(ti) = r {
                 for (si, (a, b)) in o.slots.iter().zip(&t.slots).enumerate() {
                     if a.clip != b.clip {
-                        let clip = b.clip.as_ref().map(|c| compile_clip(c, media));
+                        let clip = b.clip.as_ref().map(|c| compile_clip(c, media, p.transport.bpm));
                         send(Command::SetClip { track: ti as u16, slot: si as u16, clip: Box::new(clip) });
                     }
                 }
             }
             if o.arrangement != t.arrangement {
-                send(Command::SetArrangement { track: tix, clips: Box::new(compile_arrangement(t, media)) });
+                send(Command::SetArrangement { track: tix, clips: Box::new(compile_arrangement(t, media, p.transport.bpm)) });
             }
             if o.automation != t.automation {
                 send(Command::SetAutomation { track: tix, lanes: Box::new(compile_automation(t)) });

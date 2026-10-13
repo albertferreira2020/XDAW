@@ -1216,7 +1216,7 @@ fn play_clip(
             let bps = span.clock.beats_per_sample();
             let spb = span.clock.samples_per_beat();
             let rate_scale = match warp {
-                WarpMode::RePitch => 1.0,
+                WarpMode::RePitch | WarpMode::Stretch => 1.0,
                 WarpMode::Off => *source_bpm / span.clock.bpm(),
             };
             let to_frames = 60.0 / *source_bpm * data.sample_rate;
@@ -1266,7 +1266,7 @@ fn render_tail(t: &mut RtTrack, span: &Span, a: usize, b: usize) {
         return;
     };
     let rate_scale = match warp {
-        WarpMode::RePitch => 1.0,
+        WarpMode::RePitch | WarpMode::Stretch => 1.0,
         WarpMode::Off => *source_bpm / span.clock.bpm(),
     };
     let to_frames = 60.0 / *source_bpm * data.sample_rate;

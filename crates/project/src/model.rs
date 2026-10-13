@@ -174,6 +174,13 @@ pub enum WarpMode {
     RePitch,
     /// Plays at the file's original speed; tempo has no effect.
     Off,
+    /// Follows tempo with pitch preserved (offline WSOLA rendering, see `xdaw_dsp::stretch`).
+    Stretch,
+}
+
+/// Media-cache key of a clip's stretched rendering at a project tempo.
+pub fn stretch_key(path: &str, source_bpm: f64, bpm: f64) -> String {
+    format!("{path}#stretch={:.4}", source_bpm / bpm)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

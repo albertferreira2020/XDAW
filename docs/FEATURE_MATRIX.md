@@ -102,7 +102,7 @@ Platform: macOS 26.6.2, Apple M5, built-in output at 48 kHz. Windows/Linux: **no
 | Warp "Re-Pitch" (tempo follows by resampling; pitch changes) | L10 §9 | Verified | loop drift test |
 | Warp "Off" | L10 §9 | Implemented, unverified | |
 | Warp markers | L10 §9 | Not implemented (model field only) | |
-| Pitch-preserving time stretching | L10 §9 | Not implemented | must be added and validated separately |
+| Pitch-preserving time stretching (warp mode "Stretch") | L10 §9 | Verified (DSP + engine) | WSOLA, 2048-sample Hann frames, ±512 search, offline on the media worker; `stretch_changes_length_but_not_pitch` (pitch ±1 %, exact length), `stretch_clip_uses_pitch_preserving_rendering_when_available`. Limits: transient smearing/doubling at large ratios, ratio 0.25–4, Re-Pitch fallback while rendering after tempo changes, memory per tempo |
 
 ## Files and projects
 

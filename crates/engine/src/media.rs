@@ -116,8 +116,13 @@ pub struct MediaCache {
     pub failed: HashMap<String, MediaError>,
     pub overviews: HashMap<String, Arc<Vec<(f32, f32)>>>,
     pending: HashMap<String, ()>,
-    jobs: Sender<(String, PathBuf)>,
+    jobs: Sender<Job>,
     results: Receiver<LoadedMedia>,
+}
+
+enum Job {
+    Decode(String, PathBuf),
+    Stretch(String, Arc<SampleData>, f64),
 }
 
 impl MediaSource for MediaCache {
@@ -134,13 +139,16 @@ impl Default for MediaCache {
 
 impl MediaCache {
     pub fn new() -> Self {
-        let (jobs, rx) = crossbeam_channel::unbounded::<(String, PathBuf)>();
+        let (jobs, rx) = crossbeam_channel::unbounded::<Job>();
         let (tx, results) = crossbeam_channel::unbounded();
         std::thread::Builder::new()
             .name("xdaw-media-loader".into())
             .spawn(move || {
-                for (key, path) in rx {
-                    let result = decode_file(&path).map(Arc::new);
+                for job in rx {
+                    let (key, result) = match job {
+                        Job::Decode(key, path) => (key, decode_file(&path).map(Arc::new)),
+                        Job::Stretch(key, src, ratio) => (key, Ok(Arc::new(xdaw_dsp::stretch::wsola(&src, ratio)))),
+                    };
                     if tx.send(LoadedMedia { key, result }).is_err() {
                         break;
                     }
@@ -156,7 +164,18 @@ impl MediaCache {
             return;
         }
         self.pending.insert(key.to_string(), ());
-        let _ = self.jobs.send((key.to_string(), path));
+        let _ = self.jobs.send(Job::Decode(key.to_string(), path));
+    }
+
+    /// Queues a pitch-preserving rendering of `base` stretched by `ratio` (length factor).
+    pub fn request_stretch(&mut self, key: &str, base: &str, ratio: f64) -> bool {
+        if self.loaded.contains_key(key) || self.pending.contains_key(key) {
+            return false;
+        }
+        let Some(src) = self.loaded.get(base).cloned() else { return false };
+        self.pending.insert(key.to_string(), ());
+        let _ = self.jobs.send(Job::Stretch(key.to_string(), src, ratio));
+        true
     }
 
     pub fn retry_failed(&mut self) {

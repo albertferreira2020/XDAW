@@ -122,7 +122,12 @@ fn properties(app: &mut XdawApp, ui: &mut Ui, loc: ClipLoc) {
             egui::ComboBox::from_label("Warp").selected_text(match a.warp {
                 WarpMode::RePitch => "Re-Pitch",
                 WarpMode::Off => "Off",
+                WarpMode::Stretch => "Stretch",
             }).show_ui(ui, |ui| {
+                changed |= ui
+                    .selectable_value(&mut a.warp, WarpMode::Stretch, "Stretch")
+                    .on_hover_text("Follows tempo with pitch preserved (WSOLA, rendered in the background; plays as Re-Pitch until ready)")
+                    .changed();
                 changed |= ui.selectable_value(&mut a.warp, WarpMode::RePitch, "Re-Pitch").on_hover_text("Follows tempo by resampling: pitch changes with tempo").changed();
                 changed |= ui.selectable_value(&mut a.warp, WarpMode::Off, "Off").on_hover_text("Plays at original speed").changed();
             });

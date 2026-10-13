@@ -206,3 +206,47 @@ fn decodes_wav_aiff_and_flac_identically() {
     std::fs::write(&bad, b"RIFF....WAVEjunk").unwrap();
     assert!(xdaw_engine::media::decode_file(&bad).is_err(), "invalid file is rejected");
 }
+
+#[test]
+fn stretch_clip_uses_pitch_preserving_rendering_when_available() {
+    use xdaw_project::stretch_key;
+    let sr = 48_000.0;
+    let mut p = Project::new("s");
+    p.transport.bpm = 100.0;
+    p.add_scene("S");
+    p.add_track(TrackKind::Audio, "A");
+    let src = Arc::new(SampleData { channels: vec![(0..96_000).map(|i| (std::f32::consts::TAU * 440.0 * i as f32 / 48_000.0).sin() * 0.5).collect()], sample_rate: sr });
+    let mut media = Media::new();
+    media.insert("tone".into(), src.clone());
+    let id = p.alloc_id();
+    p.tracks[0].slots[0].clip = Some(Clip {
+        id,
+        name: "tone".into(),
+        color: [0; 3],
+        // Recorded at 120 BPM: 2 s = 4 beats. At 100 BPM, 4 beats last 2.4 s.
+        content: ClipContent::Audio(AudioContent { media: MediaRef { path: "tone".into() }, warp: WarpMode::Stretch, source_bpm: 120.0, markers: vec![] }),
+        region: ClipRegion::looped(4.0),
+        launch_mode: Default::default(),
+        quantize: Default::default(),
+        legato: false,
+        gain_db: 0.0,
+        transpose: 0,
+        follow: Default::default(),
+    });
+    let crossings = |x: &[f32]| x.windows(2).filter(|w| w[0] < 0.0 && w[1] >= 0.0).count() as f32;
+    let play = |media: &Media| {
+        let g = build_graph(&p, media, sr).unwrap();
+        let (mut h, mut r, _) = create(g, 100.0, false);
+        h.send(Command::LaunchSlot { track: 0, slot: 0, down: true });
+        render(&mut r, 96_000)
+    };
+    // Without the rendering: Re-Pitch fallback, pitch drops by 100/120.
+    let fallback = play(&media);
+    let f0 = crossings(&fallback[4_800..91_200]) / 1.8;
+    assert!((f0 - 440.0 * 100.0 / 120.0).abs() < 5.0, "fallback {f0} Hz");
+    // With the WSOLA rendering: pitch preserved.
+    media.insert(stretch_key("tone", 120.0, 100.0), Arc::new(xdaw_dsp::stretch::wsola(&src, 1.2)));
+    let stretched = play(&media);
+    let f1 = crossings(&stretched[4_800..91_200]) / 1.8;
+    assert!((f1 - 440.0).abs() < 5.0, "stretched {f1} Hz");
+}

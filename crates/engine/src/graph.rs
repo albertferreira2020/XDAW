@@ -228,9 +228,22 @@ impl Graph {
     }
 }
 
-pub fn compile_clip(clip: &model::Clip, media: &dyn MediaSource) -> RtClip {
+pub fn compile_clip(clip: &model::Clip, media: &dyn MediaSource, bpm: f64) -> RtClip {
     let content = match &clip.content {
-        ClipContent::Audio(a) => RtContent::Audio { data: media.get(&a.media), warp: a.warp, source_bpm: a.source_bpm.max(1.0) },
+        ClipContent::Audio(a) if a.warp == WarpMode::Stretch && (a.source_bpm - bpm).abs() > 1e-6 => {
+            // Use the pitch-preserving rendering for this tempo when it is ready;
+            // until then fall back to Re-Pitch so playback never stops.
+            let key = model::stretch_key(&a.media.path, a.source_bpm.max(1.0), bpm);
+            match media.get(&model::MediaRef { path: key }) {
+                Some(stretched) => RtContent::Audio { data: Some(stretched), warp: WarpMode::RePitch, source_bpm: bpm },
+                None => RtContent::Audio { data: media.get(&a.media), warp: WarpMode::RePitch, source_bpm: a.source_bpm.max(1.0) },
+            }
+        }
+        ClipContent::Audio(a) => RtContent::Audio {
+            data: media.get(&a.media),
+            warp: if a.warp == WarpMode::Stretch { WarpMode::RePitch } else { a.warp },
+            source_bpm: a.source_bpm.max(1.0),
+        },
         ClipContent::Midi { notes } => {
             let mut notes: Vec<RtNote> = notes
                 .iter()
@@ -258,7 +271,7 @@ pub fn compile_clip(clip: &model::Clip, media: &dyn MediaSource) -> RtClip {
     }
 }
 
-pub fn compile_arrangement(track: &model::Track, media: &dyn MediaSource) -> Vec<RtArrClip> {
+pub fn compile_arrangement(track: &model::Track, media: &dyn MediaSource, bpm: f64) -> Vec<RtArrClip> {
     let mut v: Vec<RtArrClip> = track
         .arrangement
         .iter()
@@ -268,7 +281,7 @@ pub fn compile_arrangement(track: &model::Track, media: &dyn MediaSource) -> Vec
             offset: a.offset,
             fade_in: a.fade_in,
             fade_out: a.fade_out,
-            clip: compile_clip(&a.clip, media),
+            clip: compile_clip(&a.clip, media, bpm),
         })
         .collect();
     v.sort_by(|a, b| a.start.total_cmp(&b.start));
@@ -294,7 +307,7 @@ pub fn compile_automation(track: &model::Track) -> Vec<RtLane> {
         .collect()
 }
 
-fn compile_track(t: &model::Track, media: &dyn MediaSource, sr: f64) -> RtTrack {
+fn compile_track(t: &model::Track, media: &dyn MediaSource, sr: f64, bpm: f64) -> RtTrack {
     let devices = t
         .devices
         .iter()
@@ -327,9 +340,9 @@ fn compile_track(t: &model::Track, media: &dyn MediaSource, sr: f64) -> RtTrack 
         id: t.id,
         kind: t.kind,
         devices,
-        slots: t.slots.iter().map(|s| s.clip.as_ref().map(|c| compile_clip(c, media))).collect(),
+        slots: t.slots.iter().map(|s| s.clip.as_ref().map(|c| compile_clip(c, media, bpm))).collect(),
         slot_has_stop: t.slots.iter().map(|s| s.has_stop_button).collect(),
-        arrangement: compile_arrangement(t, media),
+        arrangement: compile_arrangement(t, media, bpm),
         automation: compile_automation(t),
         mixer: RtMixer {
             volume_db: t.mixer.volume_db,
@@ -368,11 +381,12 @@ pub fn build_graph(project: &Project, media: &dyn MediaSource, sample_rate: f64)
     if let Some(issue) = project.validate().into_iter().next() {
         return Err(GraphError::Invalid(issue));
     }
+    let bpm = project.transport.bpm;
     Ok(Graph {
         sample_rate,
-        tracks: project.tracks.iter().map(|t| compile_track(t, media, sample_rate)).collect(),
-        returns: project.returns.iter().map(|t| compile_track(t, media, sample_rate)).collect(),
-        master: compile_track(&project.master, media, sample_rate),
+        tracks: project.tracks.iter().map(|t| compile_track(t, media, sample_rate, bpm)).collect(),
+        returns: project.returns.iter().map(|t| compile_track(t, media, sample_rate, bpm)).collect(),
+        master: compile_track(&project.master, media, sample_rate, bpm),
         time_signature: project.transport.time_signature,
         global_quantize: project.transport.global_quantize,
         return_l: vec![vec![0.0; MAX_BLOCK]; project.returns.len()],

@@ -10,6 +10,7 @@ pub mod filter;
 pub mod instruments;
 pub mod meter;
 pub mod params;
+pub mod stretch;
 pub mod util;
 
 pub use device::{Device, DeviceKind, DeviceMedia};
