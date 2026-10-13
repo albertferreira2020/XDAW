@@ -2,6 +2,7 @@
 
 mod app;
 mod arrangement;
+mod arrec;
 mod browser;
 mod capture;
 mod clip_editor;

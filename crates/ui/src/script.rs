@@ -301,6 +301,42 @@ impl Script {
                     );
                 }
                 "tempo" => app.project.transport.bpm = num(0),
+                // note TRACK PITCH VELOCITY on|off: live note to a track (as a keyboard would send).
+                "note" => {
+                    let kind = if args.get(3) == Some(&"off") {
+                        xdaw_dsp::NoteKind::Off { pitch: num(1) as u8 }
+                    } else {
+                        xdaw_dsp::NoteKind::On { pitch: num(1) as u8, velocity: num(2) as u8 }
+                    };
+                    app.rt.send(Command::Note { track: num(0) as u16, kind });
+                }
+                // arm TRACK 0|1
+                "arm" => {
+                    if let Some(t) = app.project.tracks.get_mut(num(0) as usize) {
+                        t.mixer.arm = num(1) != 0.0;
+                    }
+                }
+                // loop START LENGTH ON, punch IN OUT
+                "loop" => {
+                    let t = &mut app.project.transport;
+                    t.loop_start = num(0);
+                    t.loop_length = num(1);
+                    t.loop_enabled = num(2) != 0.0;
+                    app.rt.send(Command::SetLoop { enabled: t.loop_enabled, start: t.loop_start, length: t.loop_length });
+                }
+                "punch" => {
+                    app.project.transport.punch_in = num(0) != 0.0;
+                    app.project.transport.punch_out = num(1) != 0.0;
+                }
+                "locate" => app.rt.send(Command::Locate(num(0))),
+                // takes TRACK: lanes and the active comp
+                "takes" => {
+                    if let Some(t) = app.project.tracks.get(num(0) as usize) {
+                        let lanes: Vec<String> = t.take_lanes.iter().map(|l| format!("{}:{}", l.name, l.clips.len())).collect();
+                        let comp: Vec<String> = t.arrangement.iter().map(|c| format!("{}@{:.2}+{:.2}", c.clip.name, c.start, c.length)).collect();
+                        println!("[script] takes lanes={lanes:?} comp={comp:?}");
+                    }
+                }
                 "mastervol" => {
                     app.project.master.mixer.volume_db = num(0) as f32;
                     app.label("Master Volume");

@@ -9,7 +9,7 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 use xdaw_engine::audio_io::AudioSettings;
 use xdaw_engine::media::MediaCache;
-use xdaw_engine::protocol::{Command, EngineEvent, TrackIx};
+use xdaw_engine::protocol::{Command, EngineEvent, TrackIx, ARR_SLOT};
 use xdaw_midi::keyboard::ComputerKeyboard;
 use xdaw_project::history::Edit;
 use xdaw_project::*;
@@ -96,6 +96,7 @@ pub struct XdawApp {
     pub arrangement_record: bool,
     open_records: HashMap<usize, OpenRecord>,
     midi_takes: HashMap<usize, MidiTake>,
+    pub arr_rec: crate::arrec::ArrRec,
     audio_takes: HashMap<usize, (usize, Beats)>,
     pub dialogs: dialogs::Dialogs,
     autosave_at: Instant,
@@ -145,6 +146,7 @@ impl XdawApp {
             arrangement_record: false,
             open_records: HashMap::new(),
             midi_takes: HashMap::new(),
+            arr_rec: Default::default(),
             audio_takes: HashMap::new(),
             dialogs: dialogs::Dialogs::default(),
             autosave_at: Instant::now(),
@@ -269,6 +271,7 @@ impl XdawApp {
         self.sel = Selection::default();
         self.open_records.clear();
         self.midi_takes.clear();
+        self.arr_rec = Default::default();
         self.media = MediaCache::new();
         self.media_gen += 1;
         self.start_audio();
@@ -531,12 +534,18 @@ impl XdawApp {
                 for t in open {
                     self.close_record(t, at);
                 }
+                self.finish_midi_passes(at);
+                self.arr_rec.on = false;
                 if self.arrangement_record {
                     self.arrangement_record = false;
                     self.label("Record Arrangement");
                 }
             }
             EngineEvent::TransportStarted { .. } => {}
+            EngineEvent::RecordingStarted { track, slot, at } if slot == ARR_SLOT => {
+                self.arr_rec.audio_started(track as usize, at);
+            }
+            EngineEvent::RecordingStopped { slot, .. } if slot == ARR_SLOT => {}
             EngineEvent::RecordingStarted { track, slot, at } => {
                 let t = track as usize;
                 match self.project.tracks.get(t).map(|tr| tr.kind) {
@@ -596,13 +605,27 @@ impl XdawApp {
             EngineEvent::LiveNote { track, pitch, velocity, on, beat, frame, playing } => {
                 let sr = self.rt.settings.sample_rate as f64;
                 self.capture.entry(track as usize).or_default().note(pitch, velocity, on, beat, frame, playing, sr);
+                if self.arr_rec.on && playing && self.project.tracks.get(track as usize).is_some_and(|t| t.kind == TrackKind::Midi && t.mixer.arm) {
+                    let (from, to) = self.project.transport.punch_range();
+                    let from = from.max(self.arr_rec.pass_start);
+                    self.arr_rec.live_note(track as usize, pitch, velocity, on, beat, (from, to));
+                }
             }
-            EngineEvent::Looped { .. } => {}
+            EngineEvent::Looped { from, to } => {
+                if self.arr_rec.on {
+                    self.finish_midi_passes(from);
+                    self.arr_rec.next_pass(to);
+                }
+            }
         }
     }
 
     fn on_audio_take(&mut self, take: xdaw_engine::recorder::FinishedTake) {
         let t = take.track as usize;
+        if take.slot == ARR_SLOT {
+            self.on_arrangement_audio_take(take);
+            return;
+        }
         let (slot, _) = self.audio_takes.remove(&t).unwrap_or((take.slot as usize, 0.0));
         if let Some(e) = take.error {
             self.status_line = format!("Recording failed: {e}");
@@ -640,6 +663,75 @@ impl XdawApp {
         }
     }
 
+    /// Stores a recorded pass on its track: a new take lane that becomes the comp.
+    pub fn commit_take(&mut self, t: usize, start: Beats, length: Beats, clip: Clip) {
+        let mut next = self.project.next_id;
+        let Some(track) = self.project.tracks.get_mut(t) else { return };
+        track.record_take(start, length, clip, || {
+            next += 1;
+            next - 1
+        });
+        self.project.next_id = next;
+        self.label("Record Arrangement Take");
+    }
+
+    fn finish_midi_passes(&mut self, end: Beats) {
+        for t in self.arr_rec.midi_tracks() {
+            let Some(take) = self.arr_rec.finish_midi(t, end) else { continue };
+            let id = self.project.alloc_id();
+            let color = self.project.tracks[t].color;
+            let clip = Clip {
+                id,
+                name: "Recorded".into(),
+                color,
+                content: ClipContent::Midi { notes: take.notes },
+                region: ClipRegion::looped(take.length),
+                launch_mode: Default::default(),
+                quantize: Default::default(),
+                legato: false,
+                gain_db: 0.0,
+                transpose: 0,
+                follow: Default::default(),
+            };
+            self.commit_take(t, take.start, take.length, clip);
+        }
+    }
+
+    fn on_arrangement_audio_take(&mut self, take: xdaw_engine::recorder::FinishedTake) {
+        let t = take.track as usize;
+        let start = self.arr_rec.audio_take_start(t).unwrap_or(0.0);
+        if let Some(e) = take.error {
+            self.status_line = format!("Recording failed: {e}");
+            return;
+        }
+        if take.frames == 0 || t >= self.project.tracks.len() {
+            return;
+        }
+        let path = match self.project_dir() {
+            Some(d) if take.path.starts_with(&d) => io::relativize(&take.path, &d),
+            _ => take.path.to_string_lossy().to_string(),
+        };
+        let bpm = self.project.transport.bpm;
+        let beats = (take.frames as f64 / self.rt.settings.sample_rate as f64 * bpm / 60.0).max(0.25);
+        let id = self.project.alloc_id();
+        let clip = Clip {
+            id,
+            name: "Audio Take".into(),
+            color: self.project.tracks[t].color,
+            content: ClipContent::Audio(AudioContent { media: MediaRef { path: path.clone() }, warp: WarpMode::RePitch, source_bpm: bpm, markers: vec![], envelopes: vec![] }),
+            region: ClipRegion::looped(beats),
+            launch_mode: Default::default(),
+            quantize: Default::default(),
+            legato: false,
+            gain_db: 0.0,
+            transpose: 0,
+            follow: Default::default(),
+        };
+        self.media.request(&path, io::resolve_media(&MediaRef { path: path.clone() }, self.project_dir().as_deref()));
+        self.commit_take(t, start, beats, clip);
+        self.status_line = format!("Recorded take of {:.1} s", take.frames as f64 / self.rt.settings.sample_rate as f64);
+    }
+
     /// Ends an Arrangement log entry for a track at `at`.
     fn close_record(&mut self, t: usize, at: Beats) {
         let Some(open) = self.open_records.remove(&t) else { return };
@@ -675,8 +767,21 @@ impl XdawApp {
             for t in open {
                 self.close_record(t, now);
             }
+            self.finish_midi_passes(now);
+            self.arr_rec.on = false;
+            for t in 0..self.project.tracks.len() {
+                self.rt.send(Command::ArrRecord { track: t as u16, on: false, from: 0.0, to: 0.0 });
+            }
         } else {
             self.arrangement_record = true;
+            self.arr_rec.begin(now);
+            let (from, to) = self.project.transport.punch_range();
+            for t in 0..self.project.tracks.len() {
+                let tr = &self.project.tracks[t];
+                if tr.mixer.arm && tr.kind == TrackKind::Audio {
+                    self.rt.send(Command::ArrRecord { track: t as u16, on: true, from: from.max(now), to });
+                }
+            }
             // Clips already running are logged from now on.
             for t in 0..self.project.tracks.len() {
                 let st = self.track_status(t);

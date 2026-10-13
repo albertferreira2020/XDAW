@@ -196,6 +196,12 @@ fn control_bar(app: &mut XdawApp, ui: &mut Ui) {
     if toggle(ui, t.loop_enabled, "Loop", theme::QUEUED, 34.0).clicked() {
         t.loop_enabled = !t.loop_enabled;
     }
+    if toggle(ui, t.punch_in, "Pin", theme::RECORD, 26.0).on_hover_text("Punch-In: Arrangement recording starts at the loop start").clicked() {
+        t.punch_in = !t.punch_in;
+    }
+    if toggle(ui, t.punch_out, "Pout", theme::RECORD, 34.0).on_hover_text("Punch-Out: Arrangement recording stops at the loop end").clicked() {
+        t.punch_out = !t.punch_out;
+    }
     ui.separator();
     ui.label(RichText::new("Quantize").color(theme::TEXT_DIM));
     egui::ComboBox::from_id_salt("gq").width(64.0).selected_text(t.global_quantize.label()).show_ui(ui, |ui| {
