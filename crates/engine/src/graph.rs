@@ -37,8 +37,45 @@ pub struct RtNote {
 
 pub enum RtContent {
     /// `markers`: sorted `(beat, source_seconds)` warp markers (empty = constant tempo).
-    Audio { data: Option<Arc<SampleData>>, warp: WarpMode, source_bpm: f64, markers: Vec<(Beats, f64)> },
+    Audio { data: Option<Arc<SampleData>>, warp: WarpMode, source_bpm: f64, markers: Vec<(Beats, f64)>, env: RtEnvelopes },
     Midi { notes: Vec<RtNote> },
+}
+
+/// Clip envelopes over clip-local beats (`(beat, value)`, sorted; empty = off).
+#[derive(Default, Clone)]
+pub struct RtEnvelopes {
+    /// Gain in dB.
+    pub gain: Vec<(Beats, f32)>,
+    /// Pan -1..1.
+    pub pan: Vec<(Beats, f32)>,
+}
+
+impl RtEnvelopes {
+    pub fn from_model(a: &model::AudioContent) -> Self {
+        let pts = |t: model::ClipEnvTarget| -> Vec<(Beats, f32)> {
+            a.envelopes.iter().find(|e| e.target == t).map(|e| e.points.iter().map(|p| (p.beat, p.value)).collect()).unwrap_or_default()
+        };
+        Self { gain: pts(model::ClipEnvTarget::Gain), pan: pts(model::ClipEnvTarget::Pan) }
+    }
+}
+
+/// Linear interpolation over sorted `(beat, value)` points (no allocation).
+#[inline]
+pub fn env_at(pts: &[(Beats, f32)], beat: Beats) -> Option<f32> {
+    let first = pts.first()?;
+    if beat <= first.0 {
+        return Some(first.1);
+    }
+    let idx = pts.partition_point(|p| p.0 <= beat);
+    if idx >= pts.len() {
+        return pts.last().map(|p| p.1);
+    }
+    let (a, b) = (pts[idx - 1], pts[idx]);
+    let span = b.0 - a.0;
+    if span <= 0.0 {
+        return Some(b.1);
+    }
+    Some(a.1 + (b.1 - a.1) * ((beat - a.0) / span) as f32)
 }
 
 pub struct RtClip {
@@ -243,8 +280,8 @@ pub fn compile_clip(clip: &model::Clip, media: &dyn MediaSource, bpm: f64) -> Rt
             let key = model::stretch_key_for(a, clip.region.end, bpm);
             match media.get(&model::MediaRef { path: key }) {
                 // The rendering already contains the markers' timing at project tempo.
-                Some(stretched) => RtContent::Audio { data: Some(stretched), warp: WarpMode::RePitch, source_bpm: bpm, markers: vec![] },
-                None => RtContent::Audio { data: media.get(&a.media), warp: WarpMode::RePitch, source_bpm: a.source_bpm.max(1.0), markers: a.marker_pairs() },
+                Some(stretched) => RtContent::Audio { data: Some(stretched), warp: WarpMode::RePitch, source_bpm: bpm, markers: vec![], env: RtEnvelopes::from_model(a) },
+                None => RtContent::Audio { data: media.get(&a.media), warp: WarpMode::RePitch, source_bpm: a.source_bpm.max(1.0), markers: a.marker_pairs(), env: RtEnvelopes::from_model(a) },
             }
         }
         ClipContent::Audio(a) => RtContent::Audio {
@@ -252,6 +289,7 @@ pub fn compile_clip(clip: &model::Clip, media: &dyn MediaSource, bpm: f64) -> Rt
             warp: if a.warp == WarpMode::Stretch { WarpMode::RePitch } else { a.warp },
             source_bpm: a.source_bpm.max(1.0),
             markers: a.marker_pairs(),
+            env: RtEnvelopes::from_model(a),
         },
         ClipContent::Midi { notes } => {
             let mut notes: Vec<RtNote> = notes

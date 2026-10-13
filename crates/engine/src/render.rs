@@ -1244,7 +1244,7 @@ fn play_clip(
             }
             finished
         }
-        RtContent::Audio { data, warp, source_bpm, markers } => {
+        RtContent::Audio { data, warp, source_bpm, markers, env } => {
             let Some(data) = data.as_deref() else { return false };
             let bps = span.clock.beats_per_sample();
             let spb = span.clock.samples_per_beat();
@@ -1279,6 +1279,19 @@ fn play_clip(
                     g *= (TAIL_SAMPLES - *fade_in + 1) as f32 / TAIL_SAMPLES as f32;
                     *fade_in -= 1;
                 }
+                let (mut x, mut y) = (x, y);
+                if !env.gain.is_empty() {
+                    if let Some(db) = crate::graph::env_at(&env.gain, local) {
+                        g *= db_to_gain(db);
+                    }
+                }
+                if !env.pan.is_empty() {
+                    if let Some(p) = crate::graph::env_at(&env.pan, local) {
+                        // Balance law: centre is unity, the far side fades out.
+                        x *= (1.0 - p).clamp(0.0, 1.0).min(1.0);
+                        y *= (1.0 + p).clamp(0.0, 1.0).min(1.0);
+                    }
+                }
                 l[i] += x * g;
                 r[i] += y * g;
             }
@@ -1293,7 +1306,7 @@ fn render_tail(t: &mut RtTrack, span: &Span, a: usize, b: usize) {
         t.rt.tail = None;
         return;
     };
-    let RtContent::Audio { data: Some(data), warp, source_bpm, markers } = &clip.content else {
+    let RtContent::Audio { data: Some(data), warp, source_bpm, markers, .. } = &clip.content else {
         t.rt.tail = None;
         return;
     };
