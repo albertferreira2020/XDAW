@@ -188,6 +188,9 @@ pub struct TrackRuntime {
     pub active: [Option<ActiveNote>; MAX_ACTIVE_NOTES],
     pub held_input: [Option<HeldInput>; 128],
     pub recording_slot: Option<usize>,
+    /// Arrangement recording window while armed, and whether a take is open.
+    pub arr_rec: Option<(Beats, Beats)>,
+    pub arr_rec_open: bool,
     pub automation_overridden: [bool; 64],
     pub tail: Option<AudioTail>,
     pub fade_in: u32,
@@ -208,6 +211,8 @@ impl TrackRuntime {
             active: [None; MAX_ACTIVE_NOTES],
             held_input: [None; 128],
             recording_slot: None,
+            arr_rec: None,
+            arr_rec_open: false,
             automation_overridden: [false; 64],
             tail: None,
             fade_in: 0,
@@ -458,6 +463,8 @@ pub fn transfer_state(old: &mut Graph, new: &mut Graph) {
         std::mem::swap(&mut o.rt.active, &mut new.rt.active);
         std::mem::swap(&mut o.rt.held_input, &mut new.rt.held_input);
         std::mem::swap(&mut o.rt.recording_slot, &mut new.rt.recording_slot);
+        new.rt.arr_rec = o.rt.arr_rec;
+        new.rt.arr_rec_open = o.rt.arr_rec_open;
         std::mem::swap(&mut o.rt.automation_overridden, &mut new.rt.automation_overridden);
         new.rt.tail = o.rt.tail.take();
         new.rt.follow_at = o.rt.follow_at;

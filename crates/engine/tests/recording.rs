@@ -346,3 +346,65 @@ fn master_limiter_preset_holds_exported_peak_at_ceiling() {
     assert!(dry > 1.0, "chain should clip without the limiter, peak {dry}");
     assert!(limited <= ceiling + 1e-4 && limited > ceiling * 0.9, "limited peak {limited} vs ceiling {ceiling}");
 }
+
+fn arr_rig(dir: &str) -> (xdaw_engine::EngineHandle, xdaw_engine::Renderer, Recorder, rtrb::Producer<f32>) {
+    let mut p = Project::new("a");
+    p.add_scene("S");
+    p.add_track(TrackKind::Audio, "A");
+    p.tracks[0].mixer.arm = true;
+    let g = build_graph(&p, &Media::new(), 48_000.0).unwrap();
+    let (h, mut r, _) = create(g, 120.0, false);
+    r.include_metronome = false;
+    let dir = std::env::temp_dir().join(format!("xdaw-{dir}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let (recorder, rec_tx) = Recorder::spawn(48_000, dir);
+    r.attach_recorder(rec_tx);
+    let (in_tx, in_rx) = rtrb::RingBuffer::new(48_000 * 20);
+    r.attach_input(InputTap { consumer: in_rx, channels: 1 });
+    (h, r, recorder, in_tx)
+}
+
+/// Feeds `frames` of a counter-valued input and renders it (256-frame blocks).
+fn feed(r: &mut xdaw_engine::Renderer, tx: &mut rtrb::Producer<f32>, frames: usize) {
+    for _ in 0..frames / 256 {
+        for _ in 0..256 {
+            tx.push(0.25).unwrap();
+        }
+        render(r, 256);
+    }
+}
+
+#[test]
+fn arrangement_record_honours_the_punch_window() {
+    let (mut h, mut r, rec, mut tx) = arr_rig("punch");
+    // 120 BPM: beat 2 = 1 s. Punch 2..4 beats = frames 48000..96000.
+    h.send(Command::ArrRecord { track: 0, on: true, from: 2.0, to: 4.0 });
+    h.send(Command::Play);
+    feed(&mut r, &mut tx, 48_000 * 3);
+    let take = rec.finished.recv_timeout(Duration::from_secs(5)).expect("take closed at punch-out");
+    assert!(take.error.is_none() && take.slot == ARR_SLOT);
+    assert!((take.frames as i64 - 48_000).abs() <= 256, "{} frames", take.frames);
+    let mut events = vec![];
+    h.poll_events(|e| events.push(e));
+    let start = events.iter().find_map(|e| match e {
+        EngineEvent::RecordingStarted { slot, at, .. } if *slot == ARR_SLOT => Some(*at),
+        _ => None,
+    });
+    assert!(start.is_some_and(|b| (b - 2.0).abs() < 0.01), "start {start:?}");
+    assert!(events.iter().any(|e| matches!(e, EngineEvent::RecordingStopped { slot, at, .. } if *slot == ARR_SLOT && (*at - 4.0).abs() < 0.01)));
+}
+
+#[test]
+fn arrangement_record_makes_one_take_per_loop_pass_and_stops_with_transport() {
+    let (mut h, mut r, rec, mut tx) = arr_rig("loop");
+    h.send(Command::SetLoop { enabled: true, start: 0.0, length: 2.0 }); // 1 s loop
+    h.send(Command::ArrRecord { track: 0, on: true, from: f64::NEG_INFINITY, to: f64::INFINITY });
+    h.send(Command::Play);
+    feed(&mut r, &mut tx, 48_000 * 2 + 24_000); // two full passes + half a pass
+    h.send(Command::Stop);
+    render(&mut r, 256);
+    let takes: Vec<_> = (0..3).filter_map(|_| rec.finished.recv_timeout(Duration::from_secs(2)).ok()).collect();
+    assert_eq!(takes.len(), 3, "two full passes and the partial one");
+    assert!((takes[0].frames as i64 - 48_000).abs() <= 256 && (takes[1].frames as i64 - 48_000).abs() <= 256);
+    assert!(takes[2].frames > 20_000 && takes[2].frames < 26_000, "{}", takes[2].frames);
+}

@@ -71,6 +71,10 @@ pub enum Command {
     BackToArrangement,
     /// Begin/stop capturing input into a Session slot (MIDI recording / overdub).
     SessionRecord { track: u16, slot: u16, on: bool },
+    /// Arm (`on`) or disarm Arrangement audio recording on a track. Frames are
+    /// written only while the song position is inside `[from, to)` (punch);
+    /// every loop pass becomes its own take.
+    ArrRecord { track: u16, on: bool, from: Beats, to: Beats },
     SetMixer { track: TrackIx, param: MixParam, value: f32 },
     SetDeviceParam { track: TrackIx, device: u16, param: u16, value: f32 },
     SetDeviceBypass { track: TrackIx, device: u16, bypass: bool },
@@ -138,6 +142,8 @@ impl AtomicF64 {
 }
 
 pub const NO_SLOT: i32 = -1;
+/// `slot` value of recording events/takes that belong to the Arrangement.
+pub const ARR_SLOT: u16 = u16::MAX;
 pub const QUEUED_STOP: i32 = -2;
 
 #[derive(Default)]

@@ -386,6 +386,19 @@ impl Renderer {
                 }
             }
             Command::SessionRecord { track, slot, on } => self.session_record(track as usize, slot as usize, on, now),
+            Command::ArrRecord { track, on, from, to } => {
+                let ti = track as usize;
+                if ti < self.graph.tracks.len() {
+                    if on {
+                        if self.graph.tracks[ti].kind == TrackKind::Audio && self.input.is_some() && self.rec.is_some() {
+                            self.graph.tracks[ti].rt.arr_rec = Some((from, to));
+                        }
+                    } else {
+                        self.arr_record_stop(ti, now);
+                        self.graph.tracks[ti].rt.arr_rec = None;
+                    }
+                }
+            }
             Command::SetMixer { track, param, value } => {
                 let playing = self.playing;
                 let Some(t) = self.track_mut(track) else { return };
@@ -456,6 +469,7 @@ impl Renderer {
             if self.graph.tracks[ti].rt.recording_slot.is_some() {
                 self.session_record(ti, 0, false, now);
             }
+            self.arr_record_stop(ti, now);
             let t = &mut self.graph.tracks[ti];
             if let Some(slot) = t.rt.launcher.stop_now() {
                 let ev = EngineEvent::ClipStopped { track: ti as u16, slot: slot as u16, at: now };
@@ -509,6 +523,21 @@ impl Renderer {
                 _ => {}
             }
         }
+    }
+
+    /// Closes the open Arrangement take of a track (if any) at song position `at`.
+    fn arr_record_stop(&mut self, ti: usize, at: Beats) {
+        if !self.graph.tracks[ti].rt.arr_rec_open {
+            return;
+        }
+        self.graph.tracks[ti].rt.arr_rec_open = false;
+        if self.rec_track == Some(ti) {
+            if let Some(tx) = self.rec.as_mut() {
+                let _ = tx.push(crate::recorder::RecMsg::Stop);
+            }
+            self.rec_track = None;
+        }
+        self.sink().push(EngineEvent::RecordingStopped { track: ti as u16, slot: ARR_SLOT, at });
     }
 
     fn session_record(&mut self, ti: usize, slot: usize, on: bool, now: Beats) {
@@ -670,8 +699,10 @@ impl Renderer {
                 let from = self.beat();
                 let delta = self.loop_start - from;
                 self.shift_session_time(delta);
-                for t in self.graph.tracks.iter_mut() {
-                    end_arrangement_notes(t, 0);
+                for ti in 0..self.graph.tracks.len() {
+                    end_arrangement_notes(&mut self.graph.tracks[ti], 0);
+                    // Each loop pass is a separate take.
+                    self.arr_record_stop(ti, from);
                 }
                 self.clock.locate(self.sample, self.loop_start);
                 let to = self.loop_start;
@@ -787,6 +818,41 @@ impl Renderer {
                     }
                 }
             }
+            }
+            // Arrangement take: stream the input while the song position is inside the punch window.
+            if t.kind == TrackKind::Audio && self.input.is_some() && span.audible {
+                if let Some((from, to)) = t.rt.arr_rec {
+                    let n = span.n;
+                    let lo = if span.b0 >= from { 0 } else if span.b1 > from { span.offset(from, 0) } else { n };
+                    let hi = if span.b1 <= to { n } else if span.b0 >= to { 0 } else { span.offset(to, 0) };
+                    if lo < hi && (self.rec_track.is_none() || self.rec_track == Some(ti)) {
+                        if let Some(tx) = self.rec.as_mut() {
+                            if !t.rt.arr_rec_open {
+                                let _ = tx.push(crate::recorder::RecMsg::Start { track: ti as u16, slot: ARR_SLOT });
+                                self.rec_track = Some(ti);
+                                t.rt.arr_rec_open = true;
+                                sink.push(EngineEvent::RecordingStarted { track: ti as u16, slot: ARR_SLOT, at: span.beat(lo) });
+                            }
+                            for i in lo..hi {
+                                if tx.push(crate::recorder::RecMsg::Frame(self.in_l[at + i], self.in_r[at + i])).is_err() {
+                                    self.status.input_overruns.fetch_add(1, Ordering::Relaxed);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if t.rt.arr_rec_open && hi < n {
+                        // Left the window inside this block: close the take there.
+                        t.rt.arr_rec_open = false;
+                        if self.rec_track == Some(ti) {
+                            if let Some(tx) = self.rec.as_mut() {
+                                let _ = tx.push(crate::recorder::RecMsg::Stop);
+                            }
+                            self.rec_track = None;
+                        }
+                        sink.push(EngineEvent::RecordingStopped { track: ti as u16, slot: ARR_SLOT, at: span.beat(hi) });
+                    }
+                }
             }
             let (gr, gr_r) = (&mut self.graph.return_l, &mut self.graph.return_r);
             process_track(t, n, &ctx, any_solo, parent_solo || member_solo);
