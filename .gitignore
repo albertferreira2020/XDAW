@@ -1,0 +1,4 @@
+/target
+*.ostp.autosave
+.DS_Store
+/dist

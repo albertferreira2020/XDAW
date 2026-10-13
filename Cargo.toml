@@ -1,0 +1,41 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+ost-sequencer = { path = "crates/sequencer" }
+ost-dsp = { path = "crates/dsp" }
+ost-midi = { path = "crates/midi" }
+ost-project = { path = "crates/project" }
+ost-engine = { path = "crates/engine" }
+ost-plugin-host = { path = "crates/plugin-host" }
+
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+thiserror = "2.0.21"
+anyhow = "1.0.104"
+rtrb = "0.4.0"
+crossbeam-channel = "0.5.17"
+hound = "3.5.1"
+symphonia = { version = "0.6.1", default-features = false, features = ["wav", "aiff", "flac", "pcm"] }
+cpal = "0.18.2"
+midir = "0.11.1"
+midly = "0.5.3"
+eframe = "0.36.2"
+egui = "0.36.2"
+rfd = "0.17.2"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+debug = 1
