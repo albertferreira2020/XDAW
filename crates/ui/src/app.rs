@@ -725,14 +725,15 @@ impl XdawApp {
         for t in &self.project.tracks {
             for c in t.slots.iter().filter_map(|s| s.clip.as_ref()).chain(t.arrangement.iter().map(|a| &a.clip)) {
                 if let ClipContent::Audio(a) = &c.content {
-                    if a.warp == WarpMode::Stretch && (a.source_bpm - bpm).abs() > 1e-6 {
-                        jobs.push((stretch_key(&a.media.path, a.source_bpm, bpm), a.media.path.clone(), a.source_bpm / bpm));
+                    if a.warp == WarpMode::Stretch && ((a.source_bpm - bpm).abs() > 1e-6 || !a.markers.is_empty()) {
+                        let segments = xdaw_sequencer::warp::segments(&a.marker_pairs(), a.source_bpm, c.region.end);
+                        jobs.push((stretch_key_for(a, c.region.end, bpm), a.media.path.clone(), segments));
                     }
                 }
             }
         }
-        for (key, base, ratio) in jobs {
-            if self.media.request_stretch(&key, &base, ratio) {
+        for (key, base, segments) in jobs {
+            if self.media.request_stretch(&key, &base, segments, bpm) {
                 self.status_line = format!("Stretching audio for {bpm:.2} BPM…");
             }
         }

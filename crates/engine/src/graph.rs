@@ -36,7 +36,8 @@ pub struct RtNote {
 }
 
 pub enum RtContent {
-    Audio { data: Option<Arc<SampleData>>, warp: WarpMode, source_bpm: f64 },
+    /// `markers`: sorted `(beat, source_seconds)` warp markers (empty = constant tempo).
+    Audio { data: Option<Arc<SampleData>>, warp: WarpMode, source_bpm: f64, markers: Vec<(Beats, f64)> },
     Midi { notes: Vec<RtNote> },
 }
 
@@ -236,19 +237,21 @@ impl Graph {
 
 pub fn compile_clip(clip: &model::Clip, media: &dyn MediaSource, bpm: f64) -> RtClip {
     let content = match &clip.content {
-        ClipContent::Audio(a) if a.warp == WarpMode::Stretch && (a.source_bpm - bpm).abs() > 1e-6 => {
+        ClipContent::Audio(a) if a.warp == WarpMode::Stretch && ((a.source_bpm - bpm).abs() > 1e-6 || !a.markers.is_empty()) => {
             // Use the pitch-preserving rendering for this tempo when it is ready;
             // until then fall back to Re-Pitch so playback never stops.
-            let key = model::stretch_key(&a.media.path, a.source_bpm.max(1.0), bpm);
+            let key = model::stretch_key_for(a, clip.region.end, bpm);
             match media.get(&model::MediaRef { path: key }) {
-                Some(stretched) => RtContent::Audio { data: Some(stretched), warp: WarpMode::RePitch, source_bpm: bpm },
-                None => RtContent::Audio { data: media.get(&a.media), warp: WarpMode::RePitch, source_bpm: a.source_bpm.max(1.0) },
+                // The rendering already contains the markers' timing at project tempo.
+                Some(stretched) => RtContent::Audio { data: Some(stretched), warp: WarpMode::RePitch, source_bpm: bpm, markers: vec![] },
+                None => RtContent::Audio { data: media.get(&a.media), warp: WarpMode::RePitch, source_bpm: a.source_bpm.max(1.0), markers: a.marker_pairs() },
             }
         }
         ClipContent::Audio(a) => RtContent::Audio {
             data: media.get(&a.media),
             warp: if a.warp == WarpMode::Stretch { WarpMode::RePitch } else { a.warp },
             source_bpm: a.source_bpm.max(1.0),
+            markers: a.marker_pairs(),
         },
         ClipContent::Midi { notes } => {
             let mut notes: Vec<RtNote> = notes

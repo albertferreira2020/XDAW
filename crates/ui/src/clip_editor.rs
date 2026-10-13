@@ -145,6 +145,26 @@ fn properties(app: &mut XdawApp, ui: &mut Ui, loc: ClipLoc) {
                 c.region.end = best;
                 changed = true;
             }
+            ui.label(egui::RichText::new("Warp markers (beat → source s)").color(theme::TEXT_DIM));
+            let mut remove = None;
+            for (i, m) in a.markers.iter_mut().enumerate() {
+                ui.horizontal(|ui| {
+                    changed |= ui.add(egui::DragValue::new(&mut m.beat).speed(0.0625).range(0.0..=4096.0).max_decimals(3)).changed();
+                    ui.label("→");
+                    changed |= ui.add(egui::DragValue::new(&mut m.source_seconds).speed(0.001).range(0.0..=36_000.0).max_decimals(4).suffix(" s")).changed();
+                    if ui.small_button("x").clicked() {
+                        remove = Some(i);
+                    }
+                });
+            }
+            if let Some(i) = remove {
+                a.markers.remove(i);
+                changed = true;
+            }
+            if changed {
+                a.markers.sort_by(|x, y| x.beat.total_cmp(&y.beat));
+            }
+            ui.label(egui::RichText::new("Double-click the waveform to add a marker").size(9.5).color(theme::TEXT_DIM));
             ui.label(egui::RichText::new(&a.media.path).size(9.5).color(theme::TEXT_DIM));
         }
         ClipContent::Midi { notes } => {
@@ -628,6 +648,32 @@ fn audio_view(app: &mut XdawApp, ui: &mut Ui) {
         let x = x_of(b);
         p.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1.5, c));
         p.text(pos2(x + 2.0, rect.top() + 2.0), Align2::LEFT_TOP, label, FontId::proportional(10.0), c);
+    }
+    // Warp markers at their source positions.
+    let secs_to_x = |s: f64| x_of(s * a.source_bpm / 60.0);
+    for m in &a.markers {
+        let x = secs_to_x(m.source_seconds);
+        p.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1.0, theme::ACCENT));
+        p.text(pos2(x + 2.0, rect.bottom() - 12.0), Align2::LEFT_TOP, format!("{:.2}", m.beat), FontId::proportional(9.5), theme::ACCENT);
+    }
+    if resp.double_clicked() {
+        if let Some(q) = resp.interact_pointer_pos() {
+            let secs = beat_of(q.x) * 60.0 / a.source_bpm;
+            // Pin this source position to the beat it currently plays at (snapped to 1/16).
+            let pairs = a.marker_pairs();
+            let mut beat = secs * a.source_bpm / 60.0;
+            for _ in 0..40 {
+                let err = xdaw_sequencer::warp::source_seconds(&pairs, a.source_bpm, beat) - secs;
+                beat -= err * a.source_bpm / 60.0;
+            }
+            let beat = (beat * 4.0).round() / 4.0;
+            if let Some(Clip { content: ClipContent::Audio(a), .. }) = app.selected_clip_mut() {
+                a.markers.push(WarpMarker { beat, source_seconds: secs });
+                a.markers.sort_by(|x, y| x.beat.total_cmp(&y.beat));
+            }
+            app.label("Add Warp Marker");
+            return;
+        }
     }
     // Drag the nearest marker.
     let id = egui::Id::new("audio_marker");

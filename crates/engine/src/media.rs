@@ -122,7 +122,34 @@ pub struct MediaCache {
 
 enum Job {
     Decode(String, PathBuf),
-    Stretch(String, Arc<SampleData>, f64),
+    Stretch(String, Arc<SampleData>, Vec<(f64, f64, f64, f64)>, f64),
+}
+
+/// Renders `(beat_from, beat_to, sec_from, sec_to)` segments of `src` at `bpm` with pitch preserved.
+pub fn render_warped(src: &SampleData, segments: &[(f64, f64, f64, f64)], bpm: f64) -> SampleData {
+    let sr = src.sample_rate;
+    let n = src.frames();
+    let mut out: Vec<Vec<f32>> = vec![vec![]; src.channels.len().max(1)];
+    for &(b0, b1, s0, s1) in segments {
+        let target = ((b1 - b0) * 60.0 / bpm * sr).round() as usize;
+        let (f0, f1) = (((s0 * sr).round().max(0.0) as usize).min(n), ((s1 * sr).round().max(0.0) as usize).min(n));
+        if target == 0 {
+            continue;
+        }
+        if f1 <= f0 {
+            for ch in out.iter_mut() {
+                ch.extend(std::iter::repeat_n(0.0, target));
+            }
+            continue;
+        }
+        let piece = SampleData { channels: src.channels.iter().map(|c| c[f0..f1].to_vec()).collect(), sample_rate: sr };
+        let stretched = xdaw_dsp::stretch::wsola(&piece, target as f64 / (f1 - f0) as f64);
+        for (ch, s) in out.iter_mut().zip(&stretched.channels) {
+            ch.extend(s.iter().take(target));
+            ch.resize(ch.len().max(ch.len() + target.saturating_sub(s.len())), 0.0);
+        }
+    }
+    SampleData { channels: out, sample_rate: sr }
 }
 
 impl MediaSource for MediaCache {
@@ -147,7 +174,7 @@ impl MediaCache {
                 for job in rx {
                     let (key, result) = match job {
                         Job::Decode(key, path) => (key, decode_file(&path).map(Arc::new)),
-                        Job::Stretch(key, src, ratio) => (key, Ok(Arc::new(xdaw_dsp::stretch::wsola(&src, ratio)))),
+                        Job::Stretch(key, src, segments, bpm) => (key, Ok(Arc::new(render_warped(&src, &segments, bpm)))),
                     };
                     if tx.send(LoadedMedia { key, result }).is_err() {
                         break;
@@ -167,14 +194,14 @@ impl MediaCache {
         let _ = self.jobs.send(Job::Decode(key.to_string(), path));
     }
 
-    /// Queues a pitch-preserving rendering of `base` stretched by `ratio` (length factor).
-    pub fn request_stretch(&mut self, key: &str, base: &str, ratio: f64) -> bool {
+    /// Queues a pitch-preserving rendering of `base` for warp `segments` at `bpm`.
+    pub fn request_stretch(&mut self, key: &str, base: &str, segments: Vec<(f64, f64, f64, f64)>, bpm: f64) -> bool {
         if self.loaded.contains_key(key) || self.pending.contains_key(key) {
             return false;
         }
         let Some(src) = self.loaded.get(base).cloned() else { return false };
         self.pending.insert(key.to_string(), ());
-        let _ = self.jobs.send(Job::Stretch(key.to_string(), src, ratio));
+        let _ = self.jobs.send(Job::Stretch(key.to_string(), src, segments, bpm));
         true
     }
 

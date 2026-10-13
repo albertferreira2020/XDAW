@@ -7,6 +7,7 @@ pub mod follow;
 pub mod launch;
 pub mod quantize;
 pub mod time;
+pub mod warp;
 
 pub use clip::ClipRegion;
 pub use follow::{FollowAction, FollowActions, FollowResult};

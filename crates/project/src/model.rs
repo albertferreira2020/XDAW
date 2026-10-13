@@ -188,6 +188,25 @@ pub fn stretch_key(path: &str, source_bpm: f64, bpm: f64) -> String {
     format!("{path}#stretch={:.4}", source_bpm / bpm)
 }
 
+/// Stretch key that also identifies the clip's warp markers and length.
+pub fn stretch_key_for(a: &AudioContent, end_beat: f64, bpm: f64) -> String {
+    let base = stretch_key(&a.media.path, a.source_bpm, bpm);
+    if a.markers.is_empty() {
+        return base;
+    }
+    let m: Vec<String> = a.markers.iter().map(|m| format!("{:.4}:{:.5}", m.beat, m.source_seconds)).collect();
+    format!("{base}#end={end_beat:.4}#m={}", m.join(","))
+}
+
+impl AudioContent {
+    /// Markers as sorted `(beat, source_seconds)` pairs.
+    pub fn marker_pairs(&self) -> Vec<(f64, f64)> {
+        let mut v: Vec<(f64, f64)> = self.markers.iter().map(|m| (m.beat, m.source_seconds)).collect();
+        v.sort_by(|a, b| a.0.total_cmp(&b.0));
+        v
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WarpMarker {
     /// Position in the source file (seconds).

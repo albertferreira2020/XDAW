@@ -1244,7 +1244,7 @@ fn play_clip(
             }
             finished
         }
-        RtContent::Audio { data, warp, source_bpm } => {
+        RtContent::Audio { data, warp, source_bpm, markers } => {
             let Some(data) = data.as_deref() else { return false };
             let bps = span.clock.beats_per_sample();
             let spb = span.clock.samples_per_beat();
@@ -1252,7 +1252,6 @@ fn play_clip(
                 WarpMode::RePitch | WarpMode::Stretch => 1.0,
                 WarpMode::Off => *source_bpm / span.clock.bpm(),
             };
-            let to_frames = 60.0 / *source_bpm * data.sample_rate;
             let mut finished = false;
             for i in a..b {
                 let beat = ba + (i - a) as f64 * bps;
@@ -1261,7 +1260,7 @@ fn play_clip(
                     finished = true;
                     break;
                 };
-                let (x, y) = data.read(local * to_frames);
+                let (x, y) = data.read(xdaw_sequencer::warp::source_seconds(markers, *source_bpm, local) * data.sample_rate);
                 let mut g = clip.gain;
                 if let Some(c) = arr {
                     // Edge declick plus user fades.
@@ -1294,7 +1293,7 @@ fn render_tail(t: &mut RtTrack, span: &Span, a: usize, b: usize) {
         t.rt.tail = None;
         return;
     };
-    let RtContent::Audio { data: Some(data), warp, source_bpm } = &clip.content else {
+    let RtContent::Audio { data: Some(data), warp, source_bpm, markers } = &clip.content else {
         t.rt.tail = None;
         return;
     };
@@ -1302,7 +1301,6 @@ fn render_tail(t: &mut RtTrack, span: &Span, a: usize, b: usize) {
         WarpMode::RePitch | WarpMode::Stretch => 1.0,
         WarpMode::Off => *source_bpm / span.clock.bpm(),
     };
-    let to_frames = 60.0 / *source_bpm * data.sample_rate;
     let bps = span.clock.beats_per_sample();
     let a = a.max(tail.start_offset as usize);
     tail.start_offset = 0;
@@ -1313,7 +1311,7 @@ fn render_tail(t: &mut RtTrack, span: &Span, a: usize, b: usize) {
         }
         let beat = ba + (i - a) as f64 * bps;
         let Some(local) = clip.region.position((beat - tail.origin) * rate_scale) else { break };
-        let (x, y) = data.read(local * to_frames);
+        let (x, y) = data.read(xdaw_sequencer::warp::source_seconds(markers, *source_bpm, local) * data.sample_rate);
         let g = clip.gain * tail.remaining as f32 / TAIL_SAMPLES as f32;
         t.l[i] += x * g;
         t.r[i] += y * g;

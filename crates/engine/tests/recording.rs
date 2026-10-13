@@ -250,3 +250,49 @@ fn stretch_clip_uses_pitch_preserving_rendering_when_available() {
     let f1 = crossings(&stretched[4_800..91_200]) / 1.8;
     assert!((f1 - 440.0).abs() < 5.0, "stretched {f1} Hz");
 }
+
+#[test]
+fn warp_markers_remap_source_time_in_repitch_and_stretch() {
+    let sr = 48_000.0;
+    let mut p = Project::new("w");
+    p.transport.bpm = 120.0;
+    p.add_scene("S");
+    p.add_track(TrackKind::Audio, "A");
+    // Ramp over 4 s so the playback position is readable from the value.
+    let len = 192_000;
+    let src = Arc::new(SampleData { channels: vec![(0..len).map(|i| i as f32 / len as f32).collect()], sample_rate: sr });
+    let mut media = Media::new();
+    media.insert("ramp".into(), src.clone());
+    let id = p.alloc_id();
+    p.tracks[0].slots[0].clip = Some(Clip {
+        id,
+        name: "ramp".into(),
+        color: [0; 3],
+        content: ClipContent::Audio(AudioContent {
+            media: MediaRef { path: "ramp".into() },
+            warp: WarpMode::RePitch,
+            source_bpm: 120.0,
+            // Beat 4 pinned to 1.0 s of source (twice the source tempo in the first bar).
+            markers: vec![WarpMarker { beat: 0.0, source_seconds: 0.0 }, WarpMarker { beat: 4.0, source_seconds: 1.0 }],
+        }),
+        region: ClipRegion::looped(8.0),
+        launch_mode: Default::default(),
+        quantize: Default::default(),
+        legato: false,
+        gain_db: 0.0,
+        transpose: 0,
+        follow: Default::default(),
+    });
+    let g = build_graph(&p, &media, sr).unwrap();
+    let (mut h, mut r, _) = create(g, 120.0, false);
+    h.send(Command::LaunchSlot { track: 0, slot: 0, down: true });
+    let l = render(&mut r, 96_000 + 24_000);
+    // Beat 2 (sample 48000) reads source 0.5 s; beat 5 (sample 120000 - 1) reads 1.0 + 0.5 = 1.5 s.
+    assert!((l[48_000] - 0.5 * sr as f32 / len as f32).abs() < 1e-3, "{}", l[48_000]);
+    assert!((l[119_999] - 1.5 * sr as f32 / len as f32).abs() < 1e-3, "{}", l[119_999]);
+
+    // Stretch rendering of the same markers keeps the segment lengths at project tempo.
+    let segs = xdaw_sequencer::warp::segments(&[(0.0, 0.0), (4.0, 1.0)], 120.0, 8.0);
+    let out = xdaw_engine::media::render_warped(&src, &segs, 120.0);
+    assert_eq!(out.frames(), 192_000, "8 beats at 120 BPM");
+}
