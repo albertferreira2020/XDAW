@@ -5,6 +5,7 @@ use crate::app::{ClipLoc, XdawApp};
 use crate::theme;
 use egui::{RichText, Ui};
 use std::path::{Path, PathBuf};
+use xdaw_dsp::presets::factory_presets;
 use xdaw_dsp::DeviceKind;
 use xdaw_project::*;
 use xdaw_sequencer::ClipRegion;
@@ -14,6 +15,8 @@ pub enum BrowserItem {
     Device(DeviceKind),
     File(PathBuf),
     Preset(PathBuf),
+    /// Built-in preset: device kind and index into `factory_presets`.
+    Factory(DeviceKind, usize),
 }
 
 pub struct BrowserState {
@@ -70,6 +73,14 @@ pub fn show(app: &mut XdawApp, ui: &mut Ui) {
             }
         });
         egui::CollapsingHeader::new("Presets").show(ui, |ui| {
+            for kind in DeviceKind::ALL {
+                for (i, p) in factory_presets(kind).iter().enumerate() {
+                    let name = format!("{} · {}", kind.name(), p.name);
+                    if matches(&name) {
+                        item(app, ui, &name, BrowserItem::Factory(kind, i));
+                    }
+                }
+            }
             let dir = presets_dir();
             for kind in DeviceKind::ALL {
                 let kdir = dir.join(format!("{kind:?}"));
@@ -147,6 +158,11 @@ pub fn load_on_selection(app: &mut XdawApp, payload: BrowserItem) {
                 load_preset(app, r, &p);
             }
         }
+        BrowserItem::Factory(k, i) => {
+            if let Some(r) = app.sel.track {
+                load_factory(app, r, k, i);
+            }
+        }
         BrowserItem::File(p) => {
             if let Some(ClipLoc::Slot { track, slot }) = app.sel.clip {
                 drop_file_on_slot(app, track, slot, &p);
@@ -206,30 +222,34 @@ pub fn load_preset(app: &mut XdawApp, r: TrackRef, path: &Path) {
             return;
         }
     };
+    apply_preset(app, r, preset.kind, &preset.name, |id| preset.params.iter().find(|(p, _)| p == id).map(|(_, v)| *v));
+}
+
+/// Loads a built-in preset onto the track's device of that kind (added if missing).
+pub fn load_factory(app: &mut XdawApp, r: TrackRef, kind: DeviceKind, index: usize) {
+    let Some(p) = factory_presets(kind).get(index) else { return };
+    apply_preset(app, r, kind, p.name, |id| p.params.iter().find(|(k, _)| *k == id).map(|(_, v)| *v));
+}
+
+/// Sets the device's parameters from `value_of` (by parameter id; unnamed ones
+/// return to their defaults so a preset never inherits the previous sound).
+fn apply_preset(app: &mut XdawApp, r: TrackRef, kind: DeviceKind, name: &str, value_of: impl Fn(&str) -> Option<f32>) {
     let track = app.project.track(r);
-    let existing = track.devices.iter().position(|d| d.kind == preset.kind);
-    let idx = match existing {
+    let idx = match track.devices.iter().position(|d| d.kind == kind) {
         Some(i) => i,
         None => {
-            if preset.kind.is_instrument() && track.kind != TrackKind::Midi {
+            if kind.is_instrument() && track.kind != TrackKind::Midi {
                 app.status_line = "Instrument presets need a MIDI track".into();
                 return;
             }
-            let id = app.project.add_device(r, preset.kind);
+            let id = app.project.add_device(r, kind);
             app.project.track(r).devices.iter().position(|d| d.id == id).unwrap_or(0)
         }
     };
     let d = &mut app.project.track_mut(r).devices[idx];
     // Parameters are matched by id so presets survive parameter reordering.
-    for (pid, v) in &preset.params {
-        if let Some(i) = d.kind.params().iter().position(|p| p.id == pid) {
-            if d.params.len() <= i {
-                d.params.resize(i + 1, 0.0);
-            }
-            d.params[i] = d.kind.params()[i].clamp(*v);
-        }
-    }
-    d.preset_name = Some(preset.name.clone());
+    d.params = kind.params().iter().map(|p| value_of(p.id).map_or(p.default, |v| p.clamp(v))).collect();
+    d.preset_name = Some(name.to_string());
     app.label("Load Preset");
 }
 

@@ -78,3 +78,8 @@ Space play/stop · Shift+Space continue · Tab switch view · F9 Arrangement Rec
 undo/redo · Cmd+S save · Cmd+Shift+S save as · Cmd+O open · Cmd+N new · Cmd+E split · Cmd+D duplicate ·
 Cmd+C / Cmd+V copy/paste · Cmd+A select all notes · Cmd+Shift+R export · Cmd+, settings ·
 Delete remove · Enter launch selected clip · arrows move/transpose selected notes.
+
+## Limiter and presets
+Add **Limiter** from Browser > Audio Effects (put it last on the master). Gain drives the signal
+into the ceiling; nothing leaves the device above Ceiling. Utility, EQ Three-Band and Limiter have
+a **Presets** menu in the device header and factory entries under Browser > Presets.

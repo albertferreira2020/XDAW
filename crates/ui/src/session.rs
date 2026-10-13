@@ -118,7 +118,7 @@ pub fn create_track_from(app: &mut XdawApp, item: BrowserItem) {
             let t = new_track_for_file(app, &p);
             drop_files_from_slot(app, t, 0, &p);
         }
-        BrowserItem::Preset(_) => {}
+        BrowserItem::Preset(_) | BrowserItem::Factory(..) => {}
     }
 }
 
@@ -145,6 +145,7 @@ pub fn track_header(app: &mut XdawApp, ui: &mut Ui, r: TrackRef) {
         match (*item).clone() {
             BrowserItem::Device(k) => browser::add_device(app, r, k),
             BrowserItem::Preset(path) => browser::load_preset(app, r, &path),
+            BrowserItem::Factory(k, i) => browser::load_factory(app, r, k, i),
             BrowserItem::File(_) => {}
         }
     }
@@ -425,6 +426,7 @@ fn slot(app: &mut XdawApp, ui: &mut Ui, t: usize, s: usize) {
             BrowserItem::File(path) => drop_files_from_slot(app, t, s, &path),
             BrowserItem::Device(k) => browser::add_device(app, TrackRef::Track(t), k),
             BrowserItem::Preset(path) => browser::load_preset(app, TrackRef::Track(t), &path),
+            BrowserItem::Factory(k, i) => browser::load_factory(app, TrackRef::Track(t), k, i),
         }
     }
     if resp.dnd_hover_payload::<SlotDrag>().is_some() || resp.dnd_hover_payload::<BrowserItem>().is_some() {

@@ -94,6 +94,8 @@ Platform: macOS 26.6.2, Apple M5, built-in output at 48 kHz. Windows/Linux: **no
 | Sampler (Hermite interpolation, ADSR, root key) | Own | Verified | `sampler_plays_at_root_rate_and_octave_up` |
 | Drum Rack (16 pads, C1–D#2) | Own | Verified | `drum_pad_maps_note_to_pad` |
 | Utility, EQ Three-Band, Filter, Compressor, Echo Delay (synced), Room Reverb | Own | Verified (signal tests) | silence, gain, filter response, compressor curve, delay timing, reverb decay, NaN recovery |
+| Limiter (gain, ceiling, release; zero latency, brickwall) | Own | Verified (signal + export tests) | output never above ceiling, quiet audio untouched, release recovers, master export peak held at -1 dB |
+| Factory presets for Utility, EQ Three-Band, Limiter | Own | Verified (data/engine tests); UI menu not exercised by script | ids/ranges valid, applied via device `Presets` menu and Browser > Presets (drag or double-click) |
 | Device order, bypass, presets (JSON, id-keyed) | prompt | Implemented, unverified (UI) | |
 | Parameter smoothing | prompt | Verified | `smoothing_reaches_target_and_bounds_step` |
 | Racks with macros | L10 | Partial (macros only) | `macros_drive_mapped_parameters_in_normalised_space` |

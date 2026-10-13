@@ -37,6 +37,7 @@ pub fn show(app: &mut XdawApp, ui: &mut Ui) {
                 match (*item).clone() {
                     BrowserItem::Device(k) => browser::add_device(app, r, k),
                     BrowserItem::Preset(p) => browser::load_preset(app, r, &p),
+                    BrowserItem::Factory(k, i) => browser::load_factory(app, r, k, i),
                     BrowserItem::File(_) => {}
                 }
             }
@@ -157,6 +158,17 @@ fn device_box(app: &mut XdawApp, ui: &mut Ui, r: TrackRef, i: usize) -> Option<A
                 }
                 if ui.small_button("▶").clicked() {
                     action = Some(Action::MoveRight(i));
+                }
+                let factory = xdaw_dsp::presets::factory_presets(d.kind);
+                if !factory.is_empty() {
+                    ui.menu_button("Presets", |ui| {
+                        for (pi, p) in factory.iter().enumerate() {
+                            if ui.selectable_label(d.preset_name.as_deref() == Some(p.name), p.name).clicked() {
+                                browser::load_factory(app, r, d.kind, pi);
+                                ui.close();
+                            }
+                        }
+                    });
                 }
                 ui.menu_button("...", |ui| {
                     let id = egui::Id::new(("preset_name", d.id));

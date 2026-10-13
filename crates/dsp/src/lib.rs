@@ -10,6 +10,7 @@ pub mod filter;
 pub mod instruments;
 pub mod meter;
 pub mod params;
+pub mod presets;
 pub mod stretch;
 pub mod util;
 

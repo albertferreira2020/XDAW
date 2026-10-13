@@ -575,6 +575,7 @@ fn track_lane(app: &mut XdawApp, ui: &mut Ui, t: usize, lane: Rect) {
             (BrowserItem::File(path), Some(b)) => drop_files(app, t, app.arr.snap(b, alt).max(0.0), &path),
             (BrowserItem::Device(k), _) => browser::add_device(app, r, k),
             (BrowserItem::Preset(path), _) => browser::load_preset(app, r, &path),
+            (BrowserItem::Factory(k, i), _) => browser::load_factory(app, r, k, i),
             _ => {}
         }
     }

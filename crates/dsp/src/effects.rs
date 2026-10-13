@@ -524,6 +524,75 @@ impl Reverb {
     }
 }
 
+// ---------------------------------------------------------------- Limiter
+
+pub const LIMITER_PARAMS: &[ParamDesc] = &[
+    ParamDesc::lin("gain", "Gain", 0.0, 24.0, 0.0, "dB"),
+    ParamDesc::lin("ceiling", "Ceiling", -12.0, 0.0, -0.3, "dB"),
+    ParamDesc::log("release", "Release", 5.0, 1_000.0, 100.0, "ms"),
+];
+
+/// Zero-latency brickwall limiter: the gain drops instantly to whatever keeps the
+/// stereo-linked peak at the ceiling and recovers with an exponential release, so
+/// the output never exceeds the ceiling (it trades lookahead for no added latency).
+pub struct Limiter {
+    params: [f32; 3],
+    drive: Smoothed,
+    ceiling: f32,
+    release: f32,
+    env: f32,
+    sr: f32,
+    /// Largest gain reduction in dB (positive) over the last block, for metering.
+    pub gain_reduction_db: f32,
+}
+
+impl Limiter {
+    pub fn param_values(&self) -> &[f32] {
+        &self.params
+    }
+
+    pub fn new(sr: f32) -> Self {
+        let params = std::array::from_fn(|i| LIMITER_PARAMS[i].default);
+        let mut l = Self { params, drive: Smoothed::new(1.0, sr, 20.0), ceiling: 1.0, release: 0.0, env: 1.0, sr, gain_reduction_db: 0.0 };
+        l.update();
+        l.drive.set_target(db_to_gain(l.params[0]));
+        l
+    }
+
+    fn update(&mut self) {
+        self.drive.set_target(db_to_gain(self.params[0]));
+        self.ceiling = db_to_gain(self.params[1]);
+        self.release = (-1.0 / (self.params[2] * 0.001 * self.sr)).exp();
+    }
+
+    pub fn set_param(&mut self, i: usize, v: f32) {
+        if let Some(d) = LIMITER_PARAMS.get(i) {
+            self.params[i] = d.clamp(v);
+            self.update();
+        }
+    }
+
+    pub fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
+        let mut min_gain: f32 = 1.0;
+        for i in 0..l.len() {
+            let d = self.drive.next();
+            let (x, y) = (l[i] * d, r[i] * d);
+            let peak = x.abs().max(y.abs());
+            let needed = if peak > self.ceiling { self.ceiling / peak } else { 1.0 };
+            // Instant attack, exponential release back towards unity.
+            let released = 1.0 + self.release * (self.env - 1.0);
+            self.env = needed.min(released);
+            if !self.env.is_finite() {
+                self.env = 1.0;
+            }
+            min_gain = min_gain.min(self.env);
+            l[i] = x * self.env;
+            r[i] = y * self.env;
+        }
+        self.gain_reduction_db = -20.0 * min_gain.max(1e-6).log10();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -608,5 +677,52 @@ mod tests {
         let (mut l, mut r) = (vec![0.1; 256], vec![0.1; 256]);
         eq.process(&mut l, &mut r);
         assert!(l.iter().all(|x| x.is_finite()));
+    }
+}
+
+#[cfg(test)]
+mod limiter_tests {
+    use super::*;
+
+    fn run(l: &mut Limiter, gain: f32, n: usize) -> (Vec<f32>, Vec<f32>) {
+        let mut a: Vec<f32> = (0..n).map(|i| gain * (i as f32 * 0.05).sin()).collect();
+        let mut b = a.clone();
+        l.process(&mut a, &mut b);
+        (a, b)
+    }
+
+    #[test]
+    fn output_never_exceeds_ceiling() {
+        let mut l = Limiter::new(48_000.0);
+        l.set_param(0, 12.0); // +12 dB drive
+        l.set_param(1, -3.0);
+        let ceil = db_to_gain(-3.0);
+        for _ in 0..8 {
+            let (a, b) = run(&mut l, 1.5, 512);
+            assert!(a.iter().chain(&b).all(|x| x.abs() <= ceil + 1e-6), "overshoot above {ceil}");
+        }
+        assert!(l.gain_reduction_db > 3.0);
+    }
+
+    #[test]
+    fn quiet_signal_passes_unchanged_and_silence_stays_silent() {
+        let mut l = Limiter::new(48_000.0);
+        let (a, _) = run(&mut l, 0.25, 256);
+        let expect: Vec<f32> = (0..256).map(|i| 0.25 * (i as f32 * 0.05).sin()).collect();
+        assert!(a.iter().zip(&expect).all(|(x, y)| (x - y).abs() < 1e-6));
+        assert!(l.gain_reduction_db < 1e-3);
+        let (s, _) = run(&mut l, 0.0, 128);
+        assert!(s.iter().all(|x| *x == 0.0));
+    }
+
+    #[test]
+    fn gain_recovers_after_a_loud_burst() {
+        let mut l = Limiter::new(48_000.0);
+        l.set_param(2, 5.0); // 5 ms release
+        run(&mut l, 4.0, 256);
+        let (a, _) = run(&mut l, 0.1, 4_800);
+        let tail = &a[4_000..];
+        let expect = |i: usize| 0.1 * ((4_000 + i) as f32 * 0.05).sin();
+        assert!(tail.iter().enumerate().all(|(i, x)| (x - expect(i)).abs() < 1e-3));
     }
 }

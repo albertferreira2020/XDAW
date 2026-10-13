@@ -296,3 +296,52 @@ fn warp_markers_remap_source_time_in_repitch_and_stretch() {
     let out = xdaw_engine::media::render_warped(&src, &segs, 120.0);
     assert_eq!(out.frames(), 192_000, "8 beats at 120 BPM");
 }
+
+/// A hot master chain: the Limiter preset keeps the exported peak at its ceiling,
+/// the same chain without it clips past 0 dBFS.
+#[test]
+fn master_limiter_preset_holds_exported_peak_at_ceiling() {
+    use xdaw_dsp::presets::{factory_presets, preset_values};
+    let build = |limit: bool| {
+        let mut p = Project::new("lim");
+        p.transport.bpm = 120.0;
+        p.add_scene("S");
+        p.add_track(TrackKind::Midi, "M");
+        p.add_device(TrackRef::Track(0), DeviceKind::PolySynth);
+        let g = p.add_device(TrackRef::Track(0), DeviceKind::Gain);
+        let gi = p.tracks[0].devices.iter().position(|d| d.id == g).unwrap();
+        p.tracks[0].devices[gi].params = vec![24.0, 0.0, 1.0];
+        if limit {
+            let lid = p.add_device(TrackRef::Master, DeviceKind::Limiter);
+            let preset = &factory_presets(DeviceKind::Limiter)[2]; // Safety Ceiling, -1 dB
+            let li = p.master.devices.iter().position(|d| d.id == lid).unwrap();
+            p.master.devices[li].params = preset_values(DeviceKind::Limiter, preset);
+        }
+        let id = p.alloc_id();
+        let notes = (0..4).map(|k| Note { pitch: 48 + 4 * k, start: k as f64, length: 1.0, velocity: 127 }).collect();
+        let clip = Clip {
+            id,
+            name: "c".into(),
+            color: [0; 3],
+            content: ClipContent::Midi { notes },
+            region: ClipRegion::looped(4.0),
+            launch_mode: Default::default(),
+            quantize: Default::default(),
+            legato: false,
+            gain_db: 0.0,
+            transpose: 0,
+            follow: Default::default(),
+        };
+        p.tracks[0].arrangement.push(ArrangementClip { id: 99, start: 0.0, length: 4.0, offset: 0.0, fade_in: 0.0, fade_out: 0.0, clip });
+        p
+    };
+    let settings = ExportSettings { start: 0.0, end: 4.0, tail_seconds: 0.2, sample_rate: 48_000, format: SampleFormat::Float32, dither: false };
+    let peak = |p: &Project| {
+        let (l, r, _) = render_offline(p, &Media::new(), &settings).unwrap();
+        l.iter().chain(&r).fold(0.0f32, |m, x| m.max(x.abs()))
+    };
+    let (dry, limited) = (peak(&build(false)), peak(&build(true)));
+    let ceiling = 10f32.powf(-1.0 / 20.0);
+    assert!(dry > 1.0, "chain should clip without the limiter, peak {dry}");
+    assert!(limited <= ceiling + 1e-4 && limited > ceiling * 0.9, "limited peak {limited} vs ceiling {ceiling}");
+}

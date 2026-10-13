@@ -90,3 +90,13 @@ Repository: `~/Documents/XDAW` (local git, branch `main`, no remote yet). REA li
   no drop position, so the pointer is read from Core Graphics during the drag).
 - Verified with the scripted UI (results in `FEATURE_MATRIX.md`); 94 tests pass. A real Finder
   drag by a person is still unverified.
+
+## Limiter and factory presets (2026-10-13)
+- New `Limiter` device (`dsp/effects.rs`): instant-attack brickwall at the ceiling, exponential
+  release, no lookahead so no added latency.
+- `dsp/presets.rs`: factory presets for EQ Three-Band (7), Utility (6) and Limiter (4), applied by
+  parameter id; unnamed params return to defaults. Available from the device `Presets` menu and
+  Browser > Presets (`BrowserItem::Factory`, same drop targets as file presets).
+- Tests: limiter ceiling/recovery/silence, preset validity, and an offline export where the
+  Safety Ceiling preset holds the master peak at -1 dB (the same chain clips without it).
+- Not verified: clicking the new menu in the running UI.

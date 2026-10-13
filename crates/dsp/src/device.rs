@@ -15,12 +15,13 @@ pub enum DeviceKind {
     Eq3,
     Filter,
     Compressor,
+    Limiter,
     Delay,
     Reverb,
 }
 
 impl DeviceKind {
-    pub const ALL: [DeviceKind; 9] = [
+    pub const ALL: [DeviceKind; 10] = [
         DeviceKind::PolySynth,
         DeviceKind::Sampler,
         DeviceKind::DrumRack,
@@ -28,6 +29,7 @@ impl DeviceKind {
         DeviceKind::Eq3,
         DeviceKind::Filter,
         DeviceKind::Compressor,
+        DeviceKind::Limiter,
         DeviceKind::Delay,
         DeviceKind::Reverb,
     ];
@@ -41,6 +43,7 @@ impl DeviceKind {
             DeviceKind::Eq3 => "EQ Three-Band",
             DeviceKind::Filter => "Filter",
             DeviceKind::Compressor => "Compressor",
+            DeviceKind::Limiter => "Limiter",
             DeviceKind::Delay => "Echo Delay",
             DeviceKind::Reverb => "Room Reverb",
         }
@@ -59,6 +62,7 @@ impl DeviceKind {
             DeviceKind::Eq3 => EQ_PARAMS,
             DeviceKind::Filter => FILTER_PARAMS,
             DeviceKind::Compressor => COMP_PARAMS,
+            DeviceKind::Limiter => LIMITER_PARAMS,
             DeviceKind::Delay => DELAY_PARAMS,
             DeviceKind::Reverb => REVERB_PARAMS,
         }
@@ -79,6 +83,7 @@ pub enum Device {
     Eq3(Box<Eq3>),
     Filter(Box<FilterFx>),
     Compressor(Box<Compressor>),
+    Limiter(Box<Limiter>),
     Delay(Box<Delay>),
     Reverb(Box<Reverb>),
 }
@@ -101,6 +106,7 @@ impl Device {
             DeviceKind::Eq3 => Device::Eq3(Box::new(Eq3::new(sr))),
             DeviceKind::Filter => Device::Filter(Box::new(FilterFx::new(sr))),
             DeviceKind::Compressor => Device::Compressor(Box::new(Compressor::new(sr))),
+            DeviceKind::Limiter => Device::Limiter(Box::new(Limiter::new(sr))),
             DeviceKind::Delay => Device::Delay(Box::new(Delay::new(sr))),
             DeviceKind::Reverb => Device::Reverb(Box::new(Reverb::new(sr))),
         }
@@ -115,6 +121,7 @@ impl Device {
             Device::Eq3(_) => DeviceKind::Eq3,
             Device::Filter(_) => DeviceKind::Filter,
             Device::Compressor(_) => DeviceKind::Compressor,
+            Device::Limiter(_) => DeviceKind::Limiter,
             Device::Delay(_) => DeviceKind::Delay,
             Device::Reverb(_) => DeviceKind::Reverb,
         }
@@ -129,6 +136,7 @@ impl Device {
             Device::Eq3(d) => d.set_param(i, v),
             Device::Filter(d) => d.set_param(i, v),
             Device::Compressor(d) => d.set_param(i, v),
+            Device::Limiter(d) => d.set_param(i, v),
             Device::Delay(d) => d.set_param(i, v),
             Device::Reverb(d) => d.set_param(i, v),
         }
@@ -143,6 +151,7 @@ impl Device {
             Device::Eq3(d) => d.param_values(),
             Device::Filter(d) => d.param_values(),
             Device::Compressor(d) => d.param_values(),
+            Device::Limiter(d) => d.param_values(),
             Device::Delay(d) => d.param_values(),
             Device::Reverb(d) => d.param_values(),
         }
@@ -170,6 +179,7 @@ impl Device {
             Device::Eq3(d) => d.process(l, r),
             Device::Filter(d) => d.process(l, r),
             Device::Compressor(d) => d.process(l, r),
+            Device::Limiter(d) => d.process(l, r),
             Device::Delay(d) => d.process(l, r, ctx),
             Device::Reverb(d) => d.process(l, r, ctx),
         }
@@ -198,6 +208,7 @@ impl Device {
     pub fn gain_reduction_db(&self) -> f32 {
         match self {
             Device::Compressor(c) => c.gain_reduction_db,
+            Device::Limiter(c) => c.gain_reduction_db,
             _ => 0.0,
         }
     }
