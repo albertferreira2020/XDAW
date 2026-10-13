@@ -15,6 +15,8 @@ pub struct Script {
     pending_shot: bool,
     /// Synthetic input, one batch per frame, injected through `raw_input_hook`.
     pub inject: std::collections::VecDeque<Vec<egui::Event>>,
+    /// Wall clock: egui input time freezes while the window is hidden.
+    started: std::time::Instant,
 }
 
 fn pointer(x: f32, y: f32) -> egui::Event {
@@ -51,11 +53,12 @@ impl Script {
             wait_until: 0.0,
             pending_shot: false,
             inject: Default::default(),
+            started: std::time::Instant::now(),
         })
     }
 
     pub fn run(&mut self, app: &mut XdawApp, ctx: &egui::Context) {
-        let now = ctx.input(|i| i.time);
+        let now = self.started.elapsed().as_secs_f64();
         // Collect screenshots requested earlier.
         let shots: Vec<(String, std::sync::Arc<egui::ColorImage>)> = ctx.input(|i| {
             i.raw

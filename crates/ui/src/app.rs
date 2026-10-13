@@ -1173,12 +1173,6 @@ impl eframe::App for XdawApp {
         let dt = self.last_frame.elapsed();
         self.last_frame = Instant::now();
         let _ = dt;
-        self.handle_engine_events();
-        if let Some(mut script) = self.script.take() {
-            script.run(self, &ctx);
-            self.script = Some(script);
-        }
-        self.handle_midi_ui();
         self.handle_keys(&ctx);
 
         transport::show(self, ui);
@@ -1201,6 +1195,20 @@ impl eframe::App for XdawApp {
         });
         dialogs::show(self, &ctx);
 
+        ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.title()));
+        ctx.request_repaint_after(Duration::from_millis(if self.playing() { 16 } else { 50 }));
+    }
+
+    /// Runs every frame and also while the window is hidden: engine events,
+    /// garbage collection, MIDI mapping, engine sync, undo commit and autosave
+    /// must not stop when the window is not drawn.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        self.handle_engine_events();
+        if let Some(mut script) = self.script.take() {
+            script.run(self, ctx);
+            self.script = Some(script);
+        }
+        self.handle_midi_ui();
         // Sync the audio thread, then record undo once gestures finish.
         if self.rt.reconciler.needs_sync(&self.project, self.media_gen) {
             let mut cmds = vec![];
@@ -1218,7 +1226,6 @@ impl eframe::App for XdawApp {
         let pointer_down = ctx.input(|i| i.pointer.any_down());
         self.commit_undo(pointer_down);
         self.autosave();
-        ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.title()));
         ctx.request_repaint_after(Duration::from_millis(if self.playing() { 16 } else { 50 }));
     }
 

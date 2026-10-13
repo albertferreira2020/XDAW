@@ -64,3 +64,16 @@ Repository: `~/Documents/XDAW` (local git, branch `main`, no remote yet). REA li
 4. Multi-clip MIDI editing (show several clips in the piano roll).
 5. Plugin hosting study: VST3 SDK license and AU (AudioToolbox) adapter in an out-of-process host.
 6. Windows/Linux builds in CI (unverified today).
+
+## Stress run (2026-10-13) — incomplete, fix pending verification
+
+- 48 kHz / 256, demo set, scripted scene launches, volume edits, view switches, Arrangement Record.
+- First ~10 min (111,104 callbacks): mean 0.085 ms, p99 ≤ 0.2 ms, max 0.490 ms of 5.333 ms budget,
+  0 deadline misses, 0 stream errors, 0 dropped commands/events. Process ran 2.3 h total:
+  113 s user CPU, 137 MB peak RSS.
+- The script stalled after ~10 min because eframe skips `ui()` while the window is hidden. That
+  exposed a product bug: engine events, garbage collection, sync and autosave only ran in `ui()`.
+  **Fixed** (commit "fix(ui): ...") by moving them to `App::logic()` and using wall-clock script
+  timing. Screenshots (`shot`) still need a visible window.
+- NEXT: rerun the 30-minute script (without `shot`) and record full statistics; then run the
+  mouse-driven UI journey (step 1 above).
