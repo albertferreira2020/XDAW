@@ -123,7 +123,8 @@ Platform: macOS 26.6.2, Apple M5, built-in output at 48 kHz. Windows/Linux: **no
 
 | Feature | Status |
 | --- | --- |
-| Racks/macros, multi-clip MIDI editing, freeze/flatten | Not implemented |
+| Flatten a track's Arrangement to a new audio track (post-device render) | Implemented, unverified (UI) |
+| Racks/macros, multi-clip MIDI editing, reversible Freeze | Not implemented |
 | VST3 / Audio Unit hosting | Not implemented (`plugin-host` placeholder) |
 | Max for Live, Push | Not implemented; require their own compatibility projects |
 

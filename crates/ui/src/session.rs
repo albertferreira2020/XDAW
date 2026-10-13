@@ -175,6 +175,10 @@ pub fn track_header(app: &mut XdawApp, ui: &mut Ui, r: TrackRef) {
                     });
                 }
             }
+            if app.project.tracks[i].kind != TrackKind::Group && ui.button("Flatten Arrangement to Audio").clicked() {
+                app.flatten_track(i);
+                ui.close();
+            }
             if ui.button("Delete Track").clicked() {
                 app.rt.send(Command::StopTrack { track: i as u16 });
                 let removed = app.project.tracks.remove(i);

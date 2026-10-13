@@ -738,6 +738,80 @@ impl XdawApp {
         }
     }
 
+    /// Flatten: renders a track's Arrangement through its devices (post-device,
+    /// unity fader, no sends/master processing) to a new audio track, and
+    /// deactivates the source track. Session clips are not included.
+    pub fn flatten_track(&mut self, t: usize) {
+        let end = self.project.tracks[t].arrangement.iter().map(|c| c.end()).fold(0.0, f64::max);
+        if end <= 0.0 {
+            self.status_line = "Flatten: the track has no Arrangement clips".into();
+            return;
+        }
+        let mut solo = self.project.clone();
+        for (i, tr) in solo.tracks.iter_mut().enumerate() {
+            tr.mixer.solo = i == t;
+            tr.group = None;
+        }
+        solo.tracks.retain(|tr| tr.kind != TrackKind::Group);
+        let Some(ti) = solo.tracks.iter().position(|tr| tr.id == self.project.tracks[t].id) else { return };
+        let tr = &mut solo.tracks[ti];
+        tr.mixer.volume_db = 0.0;
+        tr.mixer.pan = 0.0;
+        tr.mixer.mute = false;
+        tr.mixer.sends_db.iter_mut().for_each(|s| *s = SEND_OFF_DB);
+        tr.automation.retain(|l| matches!(l.target, ParamTarget::Device { .. }));
+        solo.master.devices.clear();
+        solo.master.mixer.volume_db = 0.0;
+        solo.master.automation.clear();
+        let sr = self.rt.settings.sample_rate;
+        let settings = xdaw_engine::export::ExportSettings { start: 0.0, end, tail_seconds: 0.0, sample_rate: sr, format: xdaw_engine::export::SampleFormat::Float32, dither: false };
+        let dir = match self.project_dir() {
+            Some(d) => d.join("Samples").join("Flattened"),
+            None => io::app_support_dir().join("Flattened"),
+        };
+        let name = self.project.tracks[t].name.clone();
+        let file = dir.join(format!("{}-{}.wav", name.replace(['/', '\\', ':'], "_"), self.project.next_id));
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            self.status_line = format!("Flatten failed: {e}");
+            return;
+        }
+        let media = self.media.loaded.clone();
+        match xdaw_engine::export::export_wav(&solo, &media, &settings, &file) {
+            Ok(rep) => {
+                let media_ref = crate::browser::media_ref_for(self, &file);
+                self.media.request(&media_ref.path, io::resolve_media(&media_ref, self.project_dir().as_deref()));
+                let n = self.project.tracks.len();
+                let idx = self.project.add_track(TrackKind::Audio, &format!("{name} (Flattened)"));
+                let mut new_track = self.project.tracks.remove(idx);
+                new_track.mixer = self.project.tracks[t].mixer.clone();
+                new_track.mixer.arm = false;
+                new_track.mixer.monitor = Monitor::Auto;
+                new_track.group = self.project.tracks[t].group;
+                let clip = Clip {
+                    id: self.project.alloc_id(),
+                    name: format!("{name} (Flattened)"),
+                    color: self.project.tracks[t].color,
+                    content: ClipContent::Audio(AudioContent { media: media_ref, warp: WarpMode::RePitch, source_bpm: self.project.transport.bpm, markers: vec![] }),
+                    region: ClipRegion { start: 0.0, loop_start: 0.0, end, looping: false },
+                    launch_mode: Default::default(),
+                    quantize: Default::default(),
+                    legato: false,
+                    gain_db: 0.0,
+                    transpose: 0,
+                    follow: Default::default(),
+                };
+                let id = self.project.alloc_id();
+                new_track.arrangement.push(ArrangementClip { id, start: 0.0, length: end, offset: 0.0, fade_in: 0.0, fade_out: 0.0, clip });
+                self.project.tracks.insert(t + 1, new_track);
+                self.project.tracks[t].mixer.mute = true;
+                let _ = n;
+                self.label("Flatten");
+                self.status_line = format!("Flattened '{name}' ({:.1} s, peak {:.2})", rep.frames as f64 / sr as f64, rep.peak);
+            }
+            Err(e) => self.status_line = format!("Flatten failed: {e}"),
+        }
+    }
+
     /// Capture MIDI: the latest played phrase on the selected (or first armed) MIDI track.
     pub fn capture_midi(&mut self) {
         let track = match self.sel.track {

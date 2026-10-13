@@ -171,6 +171,10 @@ impl Script {
                 }
                 "play" => app.rt.send(Command::Play),
                 "capture" => app.capture_midi(),
+                "flatten" => {
+                    app.flatten_track((num(0) as usize).saturating_sub(1));
+                    println!("[script] flatten {}", app.status_line);
+                }
                 "stop" => app.rt.send(Command::Stop),
                 "record" => app.toggle_arrangement_record(),
                 "back" => app.rt.send(Command::BackToArrangement),

@@ -1,43 +1,66 @@
 # XDAW progress log
 
 Product name: **XDAW** (renamed from the working name "Ostinato" on user request, 2026-10-13).
-Repository: `~/Documents/XDAW` (local git, `main`). REA lives separately in `~/Documents/rea`
-and is an investigation dependency only.
+Repository: `~/Documents/XDAW` (local git, branch `main`, no remote yet). REA lives separately in
+`~/Documents/rea` and is an investigation dependency only.
 
 ## Decisions
 
 | Decision | Reason |
 | --- | --- |
-| Rust 2024 workspace: `sequencer`, `dsp`, `midi`, `project`, `engine`, `plugin-host`, `ui` | Prompt architecture; dependencies flow inward (sequencer/dsp → project → engine → ui). |
-| CPAL 0.18.2, midir 0.11.1, egui/eframe 0.36.2, symphonia 0.6.1, hound 3.5.1, rtrb 0.4.0, midly 0.5.3 | Current releases on crates.io (2026-10-13); APIs checked in the registry sources. All MIT/Apache-2.0. |
-| One `Renderer` for realtime and export | Export equals playback by construction; tested for block-size independence. |
-| UI owns the `Project`; audio thread gets compiled `Graph` snapshots + fine-grained commands | No locks in the callback; structural edits swap at block boundaries; runtime state (voices, launchers, smoothers) transferred by stable ids. |
-| Replaced payloads return through a garbage ring | No deallocation on the audio thread. `SetClip` carries a `Box<Option<RtClip>>` that brings the old value back. |
-| Musical clock anchored to integer samples per tempo segment | No accumulated drift (tested: 200 loops at 44.1 kHz/128 BPM within 1 sample). |
-| Warp mode "Re-Pitch" first (pitch follows tempo) | Honest resampling; pitch-preserving stretching is a later, separately validated feature. |
-| Own JSON project format `.xdaw`, versioned (`format`, `version`) | Atomic save (temp + fsync + rename), autosave + recovery, relative media paths, Collect. |
+| Rust 2024 workspace: `sequencer`, `dsp`, `midi`, `project`, `engine`, `plugin-host`, `ui` | Prompt architecture; dependencies flow inward. |
+| CPAL 0.18.2, midir 0.11.1, egui/eframe 0.36.2, symphonia 0.6.1, hound 3.5.1, rtrb 0.4.0, midly 0.5.3 | Current releases (2026-10-13); APIs checked in registry sources; licenses in `DEPENDENCIES.md`. |
+| One `Renderer` for realtime and export | Export equals playback by construction (tested ≤ 5 % of peak across block sizes). |
+| UI owns the `Project`; audio thread gets compiled `Graph` snapshots + fine-grained commands via a reconciler | No locks in the callback; structural edits swap at block boundaries with state transfer. |
+| Replaced payloads return through a garbage ring | No deallocation on the audio thread. |
+| Integer-sample-anchored musical clock | No drift (200 loops at 44.1 kHz/128 BPM within 1 sample). |
+| Undo = automatic gesture-coalesced commits of reversible edits (track/transport/scenes/project) | Every UI mutation becomes undoable without per-widget plumbing. |
+| Pitch-preserving stretch rendered offline (WSOLA) on the media worker | Keeps the callback cheap; Re-Pitch fallback while rendering. |
+| Scripted UI driver with real pointer/key injection (`XDAW_SCRIPT`) | macOS denied screen capture to the terminal; the app captures its own screenshots. |
 
-## Evidence so far
+## Evidence
 
-- `cargo test` (workspace): sequencer 16, dsp 21, midi 6, project 7, engine scheduler 15 — all passing.
-- Quantized launch (own engine): onsets land in [0, 1) sample of the exact bar boundary at
-  48 kHz/120, 44.1 kHz/128 and 48 kHz/97.3 BPM; tempo change while queued keeps the musical boundary.
-- Real hardware (MacBook Air M5, built-in speakers, 48 kHz, buffer 256, demo session, 15 s,
-  5 scene launches): 2878 callbacks, mean 0.100 ms, max 0.143 ms, budget 5.333 ms, 0 deadline
-  misses, process CPU 2.0 %, peak RSS 35.7 MB. One backend stream error was counted in that run
-  and not reproduced in a second run; its message is now logged (pending characterization).
-- Offline export of the demo Arrangement: 33.5 s rendered in 0.32 s, 24-bit, peak 0.835, 0 clipped.
+- `cargo test --workspace`: 87 tests passing (sequencer 19, dsp 23, midi 6, project 7, engine
+  lib 1 + scheduler 19 + recording 8, ui 4).
+- Quantized launch (own engine): onsets in [0, 1) sample of the exact boundary at 48 kHz/120,
+  44.1 kHz/128, 48 kHz/97.3 BPM; tempo change while queued keeps the musical boundary.
+- Real hardware, headless (MacBook Air M5, built-in speakers, 48 kHz, buffer 256, demo, 15 s):
+  2878 callbacks, mean 0.100 ms, max 0.143 ms of 5.333 ms, 0 deadline misses, 2.0 % CPU,
+  35.7 MB peak RSS.
+- Scripted UI journey on the demo: launch scenes with Arrangement Record → Arrangement gained
+  the performance; undo/redo; Save As to another folder; reopen; export audible (peak 0.835,
+  0 clipped). Found and fixed: Save As kept media relative to the old folder.
+- Click test found and fixed: fade-out tail of a replaced clip started at the block start.
+- 30-minute UI + audio stress run: see "Stress run" below.
 
 ## Blocked / waiting on user
 
-- Ableton Live 10 is not installed on this Mac; no native RE provider (Hopper/Ghidra/IDA) configured.
-  Needed: path to a Live 10 installation provided for this work, and approval to run
+- Ableton Live 10 is not installed; no native RE provider (Hopper/Ghidra/IDA) configured.
+  Needed: path to a Live 10 installation provided for this work, and approval for
   `npx rea-agents setup` (or a Ghidra 12.1.x path) if binary analysis is wanted.
+- Optional: GitHub remote for the XDAW repository.
+- Real MIDI controller and microphone recording checks need hardware/permission on the user's side.
 
-## Next executable step
+## Milestones
 
-See the bottom of this file (updated at each milestone).
+- [x] Stage 1: Live 10 contracts for launch/quantization (`docs/research`).
+- [x] Stage 2: device output, transport, clips, mixer, quantized launch, export (real audio verified).
+- [x] Stage 3: Session ↔ Arrangement on one model, editing, undo/redo, performance recording.
+- [x] Stage 4: MIDI clips, instruments, MIDI/audio recording (engine-verified; hardware unverified).
+- [x] Stage 5: automation, effects, persistence, browser, shortcuts.
+- [~] Stage 6: Re-Pitch + Stretch warping, Follow Actions, Capture MIDI, groups, Flatten done;
+  warp markers, racks/macros, multi-clip editing, real Freeze, plugin hosting not done.
+- [~] Stage 7: audits — behaviour (tests), audio quality (DSP tests), performance (30-min run),
+  packaging (`scripts/package-macos.sh`). UX interaction coverage is partial.
 
-- [x] Stage 1: research contracts for launch/quantization (docs/research).
-- [x] Stage 2 backend: device output, transport, clips, mixer, quantized launch, export.
-- [ ] Stage 2 UI: egui app with transport, Session grid, mixer, export dialog.
+## Next executable steps
+
+1. Run the mouse-driven UI journey (`XDAW_SCRIPT` with `click`/`drag`/`key`) to verify piano-roll
+   editing, Arrangement clip drag/trim/split, automation point editing, Flatten and Capture MIDI
+   buttons; record results in `FEATURE_MATRIX.md`.
+2. Warp markers (model field exists): piecewise-linear beat→source-time map used by Re-Pitch and
+   Stretch rendering.
+3. Instrument/effect racks with 8 macros mapped to device parameters.
+4. Multi-clip MIDI editing (show several clips in the piano roll).
+5. Plugin hosting study: VST3 SDK license and AU (AudioToolbox) adapter in an out-of-process host.
+6. Windows/Linux builds in CI (unverified today).
