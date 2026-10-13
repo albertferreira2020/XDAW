@@ -1,14 +1,15 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Audio engine: compiled graph, realtime renderer, offline export, media
+//! decoding and audio device I/O.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod graph;
+pub mod protocol;
+pub mod render;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use graph::{build_graph, Graph, MediaSource};
+pub use protocol::*;
+pub use render::{MidiInput, Renderer, Rings};
+pub mod export;
+pub mod handle;
+pub mod media;
+
+pub use handle::{create, EngineHandle};
