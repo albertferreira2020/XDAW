@@ -306,11 +306,29 @@ impl Script {
                     let t = num(0) as usize;
                     if let Some(tr) = app.project.tracks.get(t) {
                         let ids: Vec<_> = tr.arrangement.iter().enumerate().filter(|(i, _)| args.len() < 2 || args[1..].iter().any(|a| a.parse::<usize>().ok() == Some(*i))).map(|(_, c)| (t, c.id)).collect();
+                        app.sel.clip = ids.first().map(|&(track, id)| ClipLoc::Arrangement { track, id });
                         app.sel.arr_clips = ids;
-                        app.sel.clip = None;
+                        app.sel.notes.clear();
                     }
                 }
                 "reverse" => crate::audio_ops::reverse_selection(app),
+                // selectnotes: select every note of every edited clip; transpose N; notesum TRACK
+                "selectnotes" => crate::clip_editor::select_all(app),
+                "transpose" => crate::clip_editor::transpose_notes(app, num(0) as i32),
+                "delnotes" => crate::clip_editor::delete_selected_notes(app),
+                "notesum" => {
+                    if let Some(tr) = app.project.tracks.get(num(0) as usize) {
+                        let v: Vec<String> = tr
+                            .arrangement
+                            .iter()
+                            .map(|c| match &c.clip.content {
+                                xdaw_project::ClipContent::Midi { notes } => format!("{}:[{}]", c.clip.name, notes.iter().map(|n| format!("{}", n.pitch)).collect::<Vec<_>>().join(",")),
+                                _ => String::new(),
+                            })
+                            .collect();
+                        println!("[script] notesum {v:?}");
+                    }
+                }
                 "consolidate" => crate::audio_ops::consolidate_selection(app),
                 "crossfade" => crate::arrangement::crossfade_selected(app),
                 // slice grid BEATS | slice transients SENS

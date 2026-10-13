@@ -1223,7 +1223,7 @@ fn play_source(t: &mut RtTrack, ti: usize, span: &Span, a: usize, b: usize, sink
     let (ba, bb) = (span.beat(a), span.beat(b));
     if let Some(p) = t.rt.launcher.playing {
         let finished = match t.slots.get(p.slot).and_then(Option::as_ref) {
-            Some(clip) => play_clip(clip, p.origin, None, ba, bb, a, b, span, &mut t.l, &mut t.r, &mut t.events, &mut t.rt.active, &mut t.rt.fade_in),
+            Some(clip) => play_clip(clip, p.origin, None, ba, bb, a, b, span, &mut t.l, &mut t.r, &mut t.events, &mut t.rt.active, &mut t.rt.fade_in, &mut t.rt.rng),
             None => false,
         };
         if finished && t.rt.recording_slot != Some(p.slot) {
@@ -1245,7 +1245,7 @@ fn play_source(t: &mut RtTrack, ti: usize, span: &Span, a: usize, b: usize, sink
             let oa = if ca > ba { span.offset(ca, a) } else { a };
             let ob = if cb < bb { span.offset(cb, a).max(oa) } else { b };
             let mut no_fade = 0;
-            play_clip(&c.clip, c.origin(), Some(c), ca, cb, oa, ob, span, &mut t.l, &mut t.r, &mut t.events, &mut t.rt.active, &mut no_fade);
+            play_clip(&c.clip, c.origin(), Some(c), ca, cb, oa, ob, span, &mut t.l, &mut t.r, &mut t.events, &mut t.rt.active, &mut no_fade, &mut t.rt.rng);
         }
     }
     // Note-offs for clip notes ending inside [ba, bb).
@@ -1277,6 +1277,7 @@ fn play_clip(
     events: &mut Vec<NoteEvent>,
     active: &mut [Option<ActiveNote>; MAX_ACTIVE_NOTES],
     fade_in: &mut u32,
+    rng: &mut xdaw_dsp::util::Rng,
 ) -> bool {
     let region = clip.region;
     match &clip.content {
@@ -1291,6 +1292,10 @@ fn play_clip(
                 for note in &notes[first..] {
                     if note.start >= lb {
                         break;
+                    }
+                    // Per-note probability: a draw per pass, none for notes that always play.
+                    if note.chance < 100 && rng.next_unit() >= note.chance as f64 / 100.0 {
+                        continue;
                     }
                     let on_beat = origin + e + (note.start - la);
                     let mut end_beat = on_beat + (note.length.min(region.end - note.start));

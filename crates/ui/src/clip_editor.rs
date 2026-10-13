@@ -18,11 +18,22 @@ pub struct PianoState {
     pub last_length: f64,
     drag: Option<NoteDrag>,
     preview: Option<u8>,
+    /// Edit every selected Arrangement MIDI clip together.
+    pub multi: bool,
+    /// Property shown and edited in the lane under the notes.
+    pub lane: NoteLane,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub enum NoteLane {
+    #[default]
+    Velocity,
+    Chance,
 }
 
 impl Default for PianoState {
     fn default() -> Self {
-        Self { key_h: 9.0, top_pitch: 84, view: HView::new(60.0, 4.0, 800.0), width: 600.0, grid: 0.25, last_length: 0.25, drag: None, preview: None }
+        Self { key_h: 9.0, top_pitch: 84, view: HView::new(60.0, 4.0, 800.0), width: 600.0, grid: 0.25, last_length: 0.25, drag: None, preview: None, multi: true, lane: NoteLane::Velocity }
     }
 }
 
@@ -217,28 +228,115 @@ fn notes_mut(app: &mut XdawApp) -> Option<&mut Vec<Note>> {
     }
 }
 
-pub fn select_all(app: &mut XdawApp) {
-    let n = app.selected_clip().map(|c| if let ClipContent::Midi { notes } = &c.content { notes.len() } else { 0 }).unwrap_or(0);
-    app.sel.notes = (0..n).collect();
+fn clip_at(app: &XdawApp, loc: ClipLoc) -> Option<&Clip> {
+    match loc {
+        ClipLoc::Slot { track, slot } => app.project.tracks.get(track)?.slots.get(slot)?.clip.as_ref(),
+        ClipLoc::Arrangement { track, id } => app.project.tracks.get(track)?.arrangement.iter().find(|c| c.id == id).map(|c| &c.clip),
+    }
 }
 
-pub fn delete_selected_notes(app: &mut XdawApp) {
-    let mut sel = std::mem::take(&mut app.sel.notes);
-    sel.sort_unstable();
-    sel.dedup();
-    if let Some(notes) = notes_mut(app) {
-        for i in sel.into_iter().rev() {
-            if i < notes.len() {
-                notes.remove(i);
+fn clip_at_mut(app: &mut XdawApp, loc: ClipLoc) -> Option<&mut Clip> {
+    match loc {
+        ClipLoc::Slot { track, slot } => app.project.tracks.get_mut(track)?.slots.get_mut(slot)?.clip.as_mut(),
+        ClipLoc::Arrangement { track, id } => app.project.tracks.get_mut(track)?.arrangement.iter_mut().find(|c| c.id == id).map(|c| &mut c.clip),
+    }
+}
+
+fn midi_notes_at_mut(app: &mut XdawApp, loc: ClipLoc) -> Option<&mut Vec<Note>> {
+    match &mut clip_at_mut(app, loc)?.content {
+        ClipContent::Midi { notes } => Some(notes),
+        _ => None,
+    }
+}
+
+/// The MIDI clips edited together: the open clip first, then (multi-clip mode)
+/// the other selected Arrangement clips. Notes are numbered across all of them
+/// (the open clip's keep their own numbers), so one selection can span clips.
+pub struct NoteSpace {
+    pub locs: Vec<ClipLoc>,
+    map: Vec<(usize, usize)>,
+}
+
+impl NoteSpace {
+    pub fn new(app: &XdawApp) -> Self {
+        let is_midi = |l: ClipLoc| clip_at(app, l).is_some_and(Clip::is_midi);
+        let mut locs: Vec<ClipLoc> = vec![];
+        if let Some(l) = app.sel.clip.filter(|l| is_midi(*l)) {
+            locs.push(l);
+        }
+        if app.piano.multi {
+            for &(track, id) in &app.sel.arr_clips {
+                let l = ClipLoc::Arrangement { track, id };
+                if !locs.contains(&l) && is_midi(l) {
+                    locs.push(l);
+                }
+            }
+        }
+        let mut map = vec![];
+        for (ci, l) in locs.iter().enumerate() {
+            if let Some(Clip { content: ClipContent::Midi { notes }, .. }) = clip_at(app, *l) {
+                map.extend((0..notes.len()).map(|ni| (ci, ni)));
+            }
+        }
+        Self { locs, map }
+    }
+
+    pub fn len(&self) -> usize {
+        self.map.len()
+    }
+
+    /// Every note with the colour of its clip.
+    pub fn notes(&self, app: &XdawApp) -> Vec<(Note, [u8; 3])> {
+        self.map
+            .iter()
+            .filter_map(|&(ci, ni)| {
+                let c = clip_at(app, self.locs[ci])?;
+                match &c.content {
+                    ClipContent::Midi { notes } => notes.get(ni).map(|n| (*n, c.color)),
+                    _ => None,
+                }
+            })
+            .collect()
+    }
+
+    pub fn edit(&self, app: &mut XdawApp, gi: usize, f: impl FnOnce(&mut Note)) {
+        if let Some(&(ci, ni)) = self.map.get(gi) {
+            if let Some(n) = midi_notes_at_mut(app, self.locs[ci]).and_then(|ns| ns.get_mut(ni)) {
+                f(n);
             }
         }
     }
+
+    pub fn remove(&self, app: &mut XdawApp, gis: &[usize]) {
+        let mut at: Vec<(usize, usize)> = gis.iter().filter_map(|&g| self.map.get(g).copied()).collect();
+        at.sort_unstable();
+        at.dedup();
+        for (ci, ni) in at.into_iter().rev() {
+            if let Some(ns) = midi_notes_at_mut(app, self.locs[ci]) {
+                if ni < ns.len() {
+                    ns.remove(ni);
+                }
+            }
+        }
+    }
+}
+
+pub fn select_all(app: &mut XdawApp) {
+    app.sel.notes = (0..NoteSpace::new(app).len()).collect();
+}
+
+pub fn delete_selected_notes(app: &mut XdawApp) {
+    let sel = std::mem::take(&mut app.sel.notes);
+    NoteSpace::new(app).remove(app, &sel);
     app.label("Delete Notes");
 }
 
 pub fn copy_notes(app: &mut XdawApp) {
-    let Some(ClipContent::Midi { notes }) = app.selected_clip().map(|c| &c.content) else { return };
-    let mut copied: Vec<Note> = app.sel.notes.iter().filter_map(|&i| notes.get(i).copied()).collect();
+    let all = NoteSpace::new(app).notes(app);
+    let mut copied: Vec<Note> = app.sel.notes.iter().filter_map(|&i| all.get(i).map(|n| n.0)).collect();
+    if copied.is_empty() {
+        return;
+    }
     let first = copied.iter().map(|n| n.start).fold(f64::INFINITY, f64::min);
     for n in copied.iter_mut() {
         n.start -= first;
@@ -251,7 +349,7 @@ pub fn paste_notes(app: &mut XdawApp) {
     let pasted = app.clipboard.notes.clone();
     let at = {
         let Some(ClipContent::Midi { notes }) = app.selected_clip().map(|c| &c.content) else { return };
-        // Paste after the current selection, or at the visible start.
+        // Paste after the current selection (the open clip's notes), or at the visible start.
         app.sel.notes.iter().filter_map(|&i| notes.get(i)).map(|n| n.start + n.length).fold(clip_beat, f64::max)
     };
     let Some(notes) = notes_mut(app) else { return };
@@ -264,40 +362,39 @@ pub fn paste_notes(app: &mut XdawApp) {
     app.label("Paste Notes");
 }
 
-fn quantize_notes(app: &mut XdawApp) {
-    let grid = app.piano.grid;
+/// Applies `f` to the selected notes of every edited clip (all notes when none is selected).
+fn edit_selected(app: &mut XdawApp, f: impl Fn(&mut Note)) {
+    let space = NoteSpace::new(app);
     let sel = app.sel.notes.clone();
-    let Some(notes) = notes_mut(app) else { return };
-    let all = sel.is_empty();
-    for (i, n) in notes.iter_mut().enumerate() {
-        if all || sel.contains(&i) {
-            n.start = (n.start / grid).round() * grid;
+    for gi in 0..space.len() {
+        if sel.is_empty() || sel.contains(&gi) {
+            space.edit(app, gi, &f);
         }
     }
+}
+
+pub fn quantize_notes(app: &mut XdawApp) {
+    let grid = app.piano.grid;
+    edit_selected(app, |n| n.start = (n.start / grid).round() * grid);
     app.label("Quantize");
 }
 
-fn transpose_notes(app: &mut XdawApp, semis: i32) {
-    let sel = app.sel.notes.clone();
-    let Some(notes) = notes_mut(app) else { return };
-    let all = sel.is_empty();
-    for (i, n) in notes.iter_mut().enumerate() {
-        if all || sel.contains(&i) {
-            n.pitch = (n.pitch as i32 + semis).clamp(0, 127) as u8;
-        }
-    }
+pub fn transpose_notes(app: &mut XdawApp, semis: i32) {
+    edit_selected(app, |n| n.pitch = (n.pitch as i32 + semis).clamp(0, 127) as u8);
     app.label("Transpose");
 }
 
 fn duplicate_loop(app: &mut XdawApp) {
-    let Some(c) = app.selected_clip_mut() else { return };
-    let len = c.region.end - c.region.loop_start;
-    let (ls, end) = (c.region.loop_start, c.region.end);
-    if let ClipContent::Midi { notes } = &mut c.content {
-        let copies: Vec<Note> = notes.iter().filter(|n| n.start >= ls && n.start < end).map(|n| Note { start: n.start + len, ..*n }).collect();
-        notes.extend(copies);
+    for loc in NoteSpace::new(app).locs {
+        let Some(c) = clip_at_mut(app, loc) else { continue };
+        let len = c.region.end - c.region.loop_start;
+        let (ls, end) = (c.region.loop_start, c.region.end);
+        if let ClipContent::Midi { notes } = &mut c.content {
+            let copies: Vec<Note> = notes.iter().filter(|n| n.start >= ls && n.start < end).map(|n| Note { start: n.start + len, ..*n }).collect();
+            notes.extend(copies);
+        }
+        c.region.end += len;
     }
-    c.region.end += len;
     app.label("Duplicate Loop");
 }
 
@@ -341,6 +438,15 @@ fn piano_roll(app: &mut XdawApp, ui: &mut Ui, loc: ClipLoc) {
             }
             if ui.small_button("×2 loop").on_hover_text("Duplicate the loop and its notes").clicked() {
                 duplicate_loop(app);
+            }
+            ui.separator();
+            ui.label("Lane");
+            ui.selectable_value(&mut app.piano.lane, NoteLane::Velocity, "Velocity");
+            ui.selectable_value(&mut app.piano.lane, NoteLane::Chance, "Chance").on_hover_text("Probability that each note plays on every pass (percent)");
+            let n_clips = NoteSpace::new(app).locs.len();
+            let selected_midi = app.sel.arr_clips.iter().filter(|&&(t, id)| clip_at(app, ClipLoc::Arrangement { track: t, id }).is_some_and(Clip::is_midi)).count();
+            if selected_midi > 1 {
+                ui.checkbox(&mut app.piano.multi, format!("Multi-clip ({n_clips})")).on_hover_text("Edit all selected Arrangement MIDI clips together (Shift-click clips to select several)");
             }
             ui.separator();
             if ui.small_button("−").on_hover_text("Zoom out (−)").clicked() {
@@ -425,7 +531,13 @@ fn roll(app: &mut XdawApp, ui: &mut Ui, resp: &egui::Response, keys: Rect, grid:
         pitch -= 1;
     }
     let Some(clip) = app.selected_clip().cloned() else { return };
-    let ClipContent::Midi { notes } = &clip.content else { return };
+    if !clip.is_midi() {
+        return;
+    }
+    let space = NoteSpace::new(app);
+    let gnotes = space.notes(app);
+    let notes: Vec<Note> = gnotes.iter().map(|g| g.0).collect();
+    let lane = app.piano.lane;
     // Loop region shading and beat lines.
     let r = clip.region;
     p.rect_filled(Rect::from_min_max(pos2(x_of(r.end), grid.top()), grid.max), 0.0, Color32::from_black_alpha(90));
@@ -448,17 +560,21 @@ fn roll(app: &mut XdawApp, ui: &mut Ui, resp: &egui::Response, keys: Rect, grid:
         }
     }
     // Notes.
-    let color = theme::rgb(clip.color);
     let mut hovered: Option<(usize, bool)> = None;
     let pointer = resp.interact_pointer_pos().or(resp.hover_pos());
     for (i, n) in notes.iter().enumerate() {
+        let color = theme::rgb(gnotes[i].1);
         let rect = Rect::from_min_max(pos2(x_of(n.start), y_of(n.pitch as i32) + 0.5), pos2(x_of(n.start + n.length), y_of(n.pitch as i32) + key_h - 0.5));
         let selected = app.sel.notes.contains(&i);
         let shade = 0.45 + 0.55 * n.velocity as f32 / 127.0;
         p.rect_filled(rect, 1.5, if selected { theme::SELECT } else { theme::dim(color, shade * 1.3) });
         p.rect_stroke(rect, 1.5, Stroke::new(1.0, Color32::from_black_alpha(140)), StrokeKind::Inside);
         let vx = rect.left();
-        let vh = (n.velocity as f32 / 127.0) * (vel.height() - 4.0);
+        let frac = match lane {
+            NoteLane::Velocity => n.velocity as f32 / 127.0,
+            NoteLane::Chance => n.chance as f32 / 100.0,
+        };
+        let vh = frac * (vel.height() - 4.0);
         p.line_segment([pos2(vx + 1.0, vel.bottom()), pos2(vx + 1.0, vel.bottom() - vh)], Stroke::new(3.0, if selected { theme::SELECT } else { color }));
         if let Some(q) = pointer {
             if rect.contains(q) {
@@ -495,7 +611,7 @@ fn roll(app: &mut XdawApp, ui: &mut Ui, resp: &egui::Response, keys: Rect, grid:
     if resp.drag_started() {
         if let Some(q) = pointer {
             if vel.contains(q) {
-                let origin = app.sel.notes.iter().filter_map(|&i| notes.get(i).map(|n| (i, n.velocity))).collect();
+                let origin = app.sel.notes.iter().filter_map(|&i| notes.get(i).map(|n| (i, if lane == NoteLane::Chance { n.chance } else { n.velocity }))).collect();
                 app.piano.drag = Some(NoteDrag::Velocity { origin, start_y: q.y });
             } else if grid.contains(q) {
                 match hovered {
@@ -526,13 +642,11 @@ fn roll(app: &mut XdawApp, ui: &mut Ui, resp: &egui::Response, keys: Rect, grid:
                     let db = beat_of(q.x) - start_beat;
                     let db = if shift { db } else { (db / gsize).round() * gsize };
                     let dp = pitch_of(q.y) - start_pitch;
-                    if let Some(ns) = notes_mut(app) {
-                        for (i, s, pch) in origin {
-                            if let Some(n) = ns.get_mut(i) {
-                                n.start = (s + db).max(0.0);
-                                n.pitch = (pch as i32 + dp).clamp(0, 127) as u8;
-                            }
-                        }
+                    for (i, s, pch) in origin {
+                        space.edit(app, i, |n| {
+                            n.start = (s + db).max(0.0);
+                            n.pitch = (pch as i32 + dp).clamp(0, 127) as u8;
+                        });
                     }
                     app.label("Move Notes");
                 }
@@ -540,13 +654,10 @@ fn roll(app: &mut XdawApp, ui: &mut Ui, resp: &egui::Response, keys: Rect, grid:
                     let db = beat_of(q.x) - start_beat;
                     let db = if shift { db } else { (db / gsize).round() * gsize };
                     let mut last = None;
-                    if let Some(ns) = notes_mut(app) {
-                        for (i, l) in origin {
-                            if let Some(n) = ns.get_mut(i) {
-                                n.length = (l + db).max(1.0 / 64.0);
-                                last = Some(n.length);
-                            }
-                        }
+                    for (i, l) in origin {
+                        let new = (l + db).max(1.0 / 64.0);
+                        space.edit(app, i, |n| n.length = new);
+                        last = Some(new);
                     }
                     if let Some(l) = last {
                         app.piano.last_length = l;
@@ -554,15 +665,13 @@ fn roll(app: &mut XdawApp, ui: &mut Ui, resp: &egui::Response, keys: Rect, grid:
                     app.label("Resize Notes");
                 }
                 NoteDrag::Velocity { origin, start_y } => {
-                    let dv = ((start_y - q.y) / (vel.height().max(1.0)) * 127.0) as i32;
-                    if let Some(ns) = notes_mut(app) {
-                        for (i, v) in origin {
-                            if let Some(n) = ns.get_mut(i) {
-                                n.velocity = (v as i32 + dv).clamp(1, 127) as u8;
-                            }
-                        }
+                    let span = if lane == NoteLane::Chance { 100.0 } else { 127.0 };
+                    let dv = ((start_y - q.y) / (vel.height().max(1.0)) * span) as i32;
+                    for (i, v) in origin {
+                        let new = (v as i32 + dv).clamp(1, span as i32) as u8;
+                        space.edit(app, i, |n| if lane == NoteLane::Chance { n.chance = new } else { n.velocity = new });
                     }
-                    app.label("Velocity");
+                    app.label(if lane == NoteLane::Chance { "Note Chance" } else { "Velocity" });
                 }
                 NoteDrag::Select { from } => {
                     let sel_rect = Rect::from_two_pos(from, q);
@@ -602,11 +711,7 @@ fn roll(app: &mut XdawApp, ui: &mut Ui, resp: &egui::Response, keys: Rect, grid:
         if let Some(q) = pointer.filter(|q| grid.contains(*q)) {
             match hovered {
                 Some((i, _)) => {
-                    if let Some(ns) = notes_mut(app) {
-                        if i < ns.len() {
-                            ns.remove(i);
-                        }
-                    }
+                    space.remove(app, &[i]);
                     app.sel.notes.clear();
                     app.label("Delete Note");
                 }
@@ -615,7 +720,7 @@ fn roll(app: &mut XdawApp, ui: &mut Ui, resp: &egui::Response, keys: Rect, grid:
                     let pitch = pitch_of(q.y).clamp(0, 127) as u8;
                     let length = app.piano.last_length.max(gsize);
                     if let Some(ns) = notes_mut(app) {
-                        ns.push(Note { pitch, start, length, velocity: 100 });
+                        ns.push(Note { pitch, start, length, velocity: 100, chance: 100 });
                         let idx = ns.len() - 1;
                         app.sel.notes = vec![idx];
                     }
@@ -636,12 +741,8 @@ fn roll(app: &mut XdawApp, ui: &mut Ui, resp: &egui::Response, keys: Rect, grid:
         let shift_b = if right { gsize } else if left { -gsize } else { 0.0 };
         if shift_b != 0.0 {
             let sel = app.sel.notes.clone();
-            if let Some(ns) = notes_mut(app) {
-                for i in sel {
-                    if let Some(n) = ns.get_mut(i) {
-                        n.start = (n.start + shift_b).max(0.0);
-                    }
-                }
+            for i in sel {
+                space.edit(app, i, |n| n.start = (n.start + shift_b).max(0.0));
             }
             app.label("Move Notes");
         }

@@ -65,7 +65,7 @@ impl ArrRec {
         } else if let Some(pass) = self.midi.get_mut(&track) {
             if let Some((velocity, start)) = pass.open.remove(&pitch) {
                 let end = beat.min(to);
-                pass.notes.push(Note { pitch, start: start - pass.start, length: (end - start).max(1.0 / 32.0), velocity });
+                pass.notes.push(Note { pitch, start: start - pass.start, length: (end - start).max(1.0 / 32.0), velocity, chance: 100 });
             }
         }
     }
@@ -74,7 +74,7 @@ impl ArrRec {
     pub fn finish_midi(&mut self, track: usize, end: Beats) -> Option<MidiTake> {
         let mut pass = self.midi.remove(&track)?;
         for (pitch, (velocity, start)) in pass.open.drain() {
-            pass.notes.push(Note { pitch, start: start - pass.start, length: (end - start).max(1.0 / 32.0), velocity });
+            pass.notes.push(Note { pitch, start: start - pass.start, length: (end - start).max(1.0 / 32.0), velocity, chance: 100 });
         }
         if pass.notes.is_empty() {
             return None;

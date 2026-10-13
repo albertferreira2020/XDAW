@@ -564,10 +564,10 @@ impl XdawApp {
             EngineEvent::NoteRecorded { track, slot, pitch, velocity, start, end, local_start } => {
                 let t = track as usize;
                 if let Some(take) = self.midi_takes.get_mut(&t) {
-                    take.notes.push(Note { pitch, start: start - take.start, length: (end - start).max(1.0 / 32.0), velocity });
+                    take.notes.push(Note { pitch, start: start - take.start, length: (end - start).max(1.0 / 32.0), velocity, chance: 100 });
                 } else if let Some(clip) = self.project.tracks.get_mut(t).and_then(|tr| tr.slots.get_mut(slot as usize)?.clip.as_mut()) {
                     if let ClipContent::Midi { notes } = &mut clip.content {
-                        notes.push(Note { pitch, start: local_start, length: (end - start).max(1.0 / 32.0), velocity });
+                        notes.push(Note { pitch, start: local_start, length: (end - start).max(1.0 / 32.0), velocity, chance: 100 });
                         notes.sort_by(|a, b| a.start.total_cmp(&b.start));
                         self.pending_label = Some("Record MIDI".into());
                     }

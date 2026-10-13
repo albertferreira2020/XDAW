@@ -272,7 +272,7 @@ pub fn drop_file_on_slot(app: &mut XdawApp, track: usize, slot: usize, path: &Pa
             Ok(m) => make_clip(
                 app,
                 path,
-                ClipContent::Midi { notes: m.notes.iter().map(|n| Note { pitch: n.pitch, start: n.start, length: n.length, velocity: n.velocity }).collect() },
+                ClipContent::Midi { notes: m.notes.iter().map(|n| Note { pitch: n.pitch, start: n.start, length: n.length, velocity: n.velocity, chance: 100 }).collect() },
                 m.length_beats,
                 track,
             ),

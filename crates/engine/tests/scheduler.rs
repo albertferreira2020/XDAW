@@ -289,7 +289,7 @@ fn midi_project(notes: Vec<Note>, clip_beats: f64) -> Project {
 fn midi_note_onsets_are_sample_accurate_across_loops() {
     let sr = 48_000.0;
     // A note at beat 0.5 inside a 1-beat loop: onsets at 0.5, 1.5, 2.5 ...
-    let p = midi_project(vec![Note { pitch: 60, start: 0.5, length: 0.1, velocity: 127 }], 1.0);
+    let p = midi_project(vec![Note { pitch: 60, start: 0.5, length: 0.1, velocity: 127, chance: 100 }], 1.0);
     let mut rig = Rig::new(&p, &Media::new(), sr);
     rig.handle.send(Command::LaunchSlot { track: 0, slot: 0, down: true });
     let (l, _) = rig.render(24_000 * 4, 100); // odd block size crosses boundaries
@@ -305,7 +305,7 @@ fn midi_note_onsets_are_sample_accurate_across_loops() {
 fn stopping_transport_leaves_no_stuck_notes() {
     let sr = 48_000.0;
     // Long sustained notes.
-    let p = midi_project(vec![Note { pitch: 60, start: 0.0, length: 64.0, velocity: 100 }, Note { pitch: 67, start: 0.0, length: 64.0, velocity: 100 }], 64.0);
+    let p = midi_project(vec![Note { pitch: 60, start: 0.0, length: 64.0, velocity: 100, chance: 100 }, Note { pitch: 67, start: 0.0, length: 64.0, velocity: 100, chance: 100 }], 64.0);
     let mut rig = Rig::new(&p, &Media::new(), sr);
     rig.handle.send(Command::LaunchSlot { track: 0, slot: 0, down: true });
     let (l, _) = rig.render(20_000, 256);
@@ -318,7 +318,7 @@ fn stopping_transport_leaves_no_stuck_notes() {
 #[test]
 fn clip_stop_and_relaunch_send_note_offs() {
     let sr = 48_000.0;
-    let p = midi_project(vec![Note { pitch: 60, start: 0.0, length: 64.0, velocity: 100 }], 64.0);
+    let p = midi_project(vec![Note { pitch: 60, start: 0.0, length: 64.0, velocity: 100, chance: 100 }], 64.0);
     let mut rig = Rig::new(&p, &Media::new(), sr);
     rig.handle.send(Command::LaunchSlot { track: 0, slot: 0, down: true });
     rig.render(10_000, 256);
@@ -334,9 +334,9 @@ fn render_is_independent_of_block_size_within_tolerance() {
     let sr = 48_000.0;
     let mut p = midi_project(
         vec![
-            Note { pitch: 60, start: 0.0, length: 0.5, velocity: 100 },
-            Note { pitch: 64, start: 0.75, length: 0.5, velocity: 90 },
-            Note { pitch: 67, start: 1.5, length: 1.0, velocity: 80 },
+            Note { pitch: 60, start: 0.0, length: 0.5, velocity: 100, chance: 100 },
+            Note { pitch: 64, start: 0.75, length: 0.5, velocity: 90, chance: 100 },
+            Note { pitch: 67, start: 1.5, length: 1.0, velocity: 80, chance: 100 },
         ],
         4.0,
     );

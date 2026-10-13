@@ -33,6 +33,8 @@ pub struct RtNote {
     pub start: Beats,
     pub length: Beats,
     pub velocity: u8,
+    /// Percent chance the note plays on each pass.
+    pub chance: u8,
 }
 
 pub enum RtContent {
@@ -308,6 +310,7 @@ pub fn compile_clip(clip: &model::Clip, media: &dyn MediaSource, bpm: f64) -> Rt
                     start: n.start,
                     length: n.length.max(1e-6),
                     velocity: n.velocity.max(1),
+                    chance: n.chance.clamp(1, 100),
                 })
                 .collect();
             notes.sort_by(|a, b| a.start.total_cmp(&b.start));

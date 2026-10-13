@@ -310,6 +310,13 @@ pub struct Note {
     pub start: Beats,
     pub length: Beats,
     pub velocity: u8,
+    /// Probability in percent (1..=100) that the note plays on each pass.
+    #[serde(default = "full_chance")]
+    pub chance: u8,
+}
+
+fn full_chance() -> u8 {
+    100
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

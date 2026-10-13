@@ -289,7 +289,7 @@ fn audio(path: &str) -> ClipContent {
 }
 
 fn notes(v: &[(f64, f64, u8, u8)]) -> ClipContent {
-    ClipContent::Midi { notes: v.iter().map(|&(start, length, pitch, velocity)| Note { pitch, start, length, velocity }).collect() }
+    ClipContent::Midi { notes: v.iter().map(|&(start, length, pitch, velocity)| Note { pitch, start, length, velocity, chance: 100 }).collect() }
 }
 
 fn beat_pattern(fill: bool) -> Vec<(f64, f64, u8, u8)> {

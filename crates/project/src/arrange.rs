@@ -278,7 +278,7 @@ impl Track {
                     let song = origin + e + (n.start - la);
                     let length = n.length.min(c.clip.region.end - n.start).min(to - song);
                     if length > 1e-9 {
-                        notes.push(Note { pitch: n.pitch, start: song - from, length, velocity: n.velocity });
+                        notes.push(Note { pitch: n.pitch, start: song - from, length, velocity: n.velocity, chance: 100 });
                     }
                 }
             });
@@ -514,7 +514,7 @@ mod tests {
         let t = p.add_track(TrackKind::Midi, "M");
         let tr = &mut p.tracks[t];
         // 2-beat loop with one note, placed over beats 1..7.
-        tr.arrangement.push(arr(1, 1.0, 6.0, 0.0, midi(vec![Note { pitch: 60, start: 0.5, length: 1.0, velocity: 90 }], 2.0)));
+        tr.arrangement.push(arr(1, 1.0, 6.0, 0.0, midi(vec![Note { pitch: 60, start: 0.5, length: 1.0, velocity: 90, chance: 100 }], 2.0)));
         assert!(tr.consolidate_midi(2.0, 6.0, ids()));
         assert_eq!(tr.arrangement.iter().filter(|c| c.start < 2.0 || c.end() > 6.0).count(), 2, "outside parts remain");
         let merged = tr.arrangement.iter().find(|c| c.start == 2.0).unwrap();

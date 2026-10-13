@@ -102,7 +102,7 @@ fn export_matches_realtime_render_of_the_same_state() {
         id,
         name: "c".into(),
         color: [0; 3],
-        content: ClipContent::Midi { notes: vec![Note { pitch: 60, start: 0.0, length: 0.5, velocity: 100 }, Note { pitch: 67, start: 1.0, length: 1.0, velocity: 80 }] },
+        content: ClipContent::Midi { notes: vec![Note { pitch: 60, start: 0.0, length: 0.5, velocity: 100, chance: 100 }, Note { pitch: 67, start: 1.0, length: 1.0, velocity: 80, chance: 100 }] },
         region: ClipRegion::looped(4.0),
         launch_mode: Default::default(),
         quantize: Default::default(),
@@ -319,7 +319,7 @@ fn master_limiter_preset_holds_exported_peak_at_ceiling() {
             p.master.devices[li].params = preset_values(DeviceKind::Limiter, preset);
         }
         let id = p.alloc_id();
-        let notes = (0..4).map(|k| Note { pitch: 48 + 4 * k, start: k as f64, length: 1.0, velocity: 127 }).collect();
+        let notes = (0..4).map(|k| Note { pitch: 48 + 4 * k, start: k as f64, length: 1.0, velocity: 127, chance: 100 }).collect();
         let clip = Clip {
             id,
             name: "c".into(),

@@ -17,7 +17,7 @@ fn midi_clip(p: &mut Project) -> Clip {
         id: p.alloc_id(),
         name: "Chords".into(),
         color: [1, 2, 3],
-        content: ClipContent::Midi { notes: vec![Note { pitch: 60, start: 0.0, length: 1.0, velocity: 100 }] },
+        content: ClipContent::Midi { notes: vec![Note { pitch: 60, start: 0.0, length: 1.0, velocity: 100, chance: 100 }] },
         region: ClipRegion::looped(4.0),
         launch_mode: Default::default(),
         quantize: Default::default(),

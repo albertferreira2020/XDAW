@@ -79,7 +79,7 @@ impl History {
                 .iter()
                 .map(|n| {
                     let (s, e) = n.beats.unwrap();
-                    Note { pitch: n.pitch, start: s - origin, length: e - s, velocity: n.velocity }
+                    Note { pitch: n.pitch, start: s - origin, length: e - s, velocity: n.velocity, chance: 100 }
                 })
                 .collect()
         } else {
@@ -91,6 +91,7 @@ impl History {
                     start: (n.start_frame - first) as f64 / frames_per_beat,
                     length: ((n.end_frame - n.start_frame) as f64 / frames_per_beat).max(1.0 / 64.0),
                     velocity: n.velocity,
+                    chance: 100,
                 })
                 .collect()
         };

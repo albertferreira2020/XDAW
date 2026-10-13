@@ -110,7 +110,7 @@ fn synth_project() -> Project {
     p.add_device(TrackRef::Track(0), DeviceKind::PolySynth);
     p.add_device(TrackRef::Track(0), DeviceKind::Delay);
     let id = p.alloc_id();
-    let notes = vec![Note { pitch: 60, start: 0.0, length: 1.0, velocity: 100 }, Note { pitch: 67, start: 2.0, length: 1.0, velocity: 90 }];
+    let notes = vec![Note { pitch: 60, start: 0.0, length: 1.0, velocity: 100, chance: 100 }, Note { pitch: 67, start: 2.0, length: 1.0, velocity: 90, chance: 100 }];
     let clip = Clip {
         id,
         name: "m".into(),
@@ -188,4 +188,48 @@ fn nested_groups_apply_each_level_in_order() {
     p.tracks[a].group = Some(ib);
     p.tracks[b].group = Some(ia);
     assert!(p.validate().iter().any(|i| i.contains("loop")));
+}
+
+#[test]
+fn note_chance_thins_out_passes_but_full_chance_always_plays() {
+    use xdaw_dsp::DeviceKind;
+    let passes = 200usize;
+    let build = |chance: u8| {
+        let mut p = Project::new("chance");
+        p.transport.bpm = 480.0; // 1 beat = 125 ms
+        p.add_scene("S");
+        p.add_track(TrackKind::Midi, "M");
+        let d = p.add_device(TrackRef::Track(0), DeviceKind::PolySynth);
+        // Short release so one pass does not ring into the next.
+        let di = p.tracks[0].devices.iter().position(|x| x.id == d).unwrap();
+        let rel = DeviceKind::PolySynth.params().iter().position(|x| x.id == "amp_release").unwrap();
+        p.tracks[0].devices[di].params[rel] = 5.0;
+        let id = p.alloc_id();
+        let clip = Clip {
+            id,
+            name: "m".into(),
+            color: [0; 3],
+            content: ClipContent::Midi { notes: vec![Note { pitch: 72, start: 0.0, length: 0.5, velocity: 120, chance }] },
+            region: ClipRegion::looped(1.0),
+            launch_mode: Default::default(),
+            quantize: Default::default(),
+            legato: false,
+            gain_db: 0.0,
+            transpose: 0,
+            follow: Default::default(),
+        };
+        p.tracks[0].arrangement.push(ArrangementClip { id: 99, start: 0.0, length: passes as f64, offset: 0.0, fade_in: 0.0, fade_out: 0.0, clip });
+        p
+    };
+    let s = ExportSettings { start: 0.0, end: passes as f64, tail_seconds: 0.0, sample_rate: SR, format: SampleFormat::Float32, dither: false };
+    let count = |p: &Project| {
+        let (l, _, _) = render_offline(p, &Media::new(), &s).unwrap();
+        let per = (SR as f64 * 0.125) as usize;
+        (0..passes).filter(|k| l[k * per..(k + 1) * per].iter().any(|x| x.abs() > 0.005)).count()
+    };
+    assert_eq!(count(&build(100)), passes);
+    let half = count(&build(50));
+    assert!((60..=140).contains(&half), "50% chance played {half} of {passes}");
+    let low = count(&build(10));
+    assert!(low < half && low > 0, "10% chance played {low}");
 }

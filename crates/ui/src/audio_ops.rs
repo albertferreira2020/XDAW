@@ -335,7 +335,7 @@ pub fn slice_to_midi(app: &mut XdawApp, mode: SliceMode) {
                 return;
             }
         }
-        notes.push(Note { pitch: FIRST_PAD_NOTE + i as u8, start: p / spb - r.start, length: ((end - p) / spb).max(1.0 / 16.0), velocity: 100 });
+        notes.push(Note { pitch: FIRST_PAD_NOTE + i as u8, start: p / spb - r.start, length: ((end - p) / spb).max(1.0 / 16.0), velocity: 100, chance: 100 });
     }
     let idx = app.project.add_track(TrackKind::Midi, &format!("{} Slices", clip.name));
     app.project.tracks[idx].color = clip.color;
