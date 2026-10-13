@@ -13,3 +13,6 @@ pub mod handle;
 pub mod media;
 
 pub use handle::{create, EngineHandle};
+pub mod audio_io;
+pub mod recorder;
+pub mod demo;

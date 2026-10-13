@@ -97,6 +97,12 @@ pub struct Renderer {
     master_l: Vec<f32>,
     master_r: Vec<f32>,
     click: Click,
+    input: Option<crate::audio_io::InputTap>,
+    in_l: Vec<f32>,
+    in_r: Vec<f32>,
+    rec: Option<Producer<crate::recorder::RecMsg>>,
+    /// Track currently streaming to the disk writer (one take at a time).
+    rec_track: Option<usize>,
 }
 
 /// Pushes an event only if capacity allows (never reallocates on the audio thread).
@@ -132,6 +138,56 @@ impl Renderer {
             master_l: vec![0.0; MAX_BLOCK],
             master_r: vec![0.0; MAX_BLOCK],
             click: Click::default(),
+            input: None,
+            in_l: vec![0.0; MAX_BLOCK],
+            in_r: vec![0.0; MAX_BLOCK],
+            rec: None,
+            rec_track: None,
+        }
+    }
+
+    pub fn attach_input(&mut self, tap: crate::audio_io::InputTap) {
+        self.input = Some(tap);
+    }
+
+    pub fn attach_recorder(&mut self, rec: Producer<crate::recorder::RecMsg>) {
+        self.rec = Some(rec);
+    }
+
+    /// Pulls `n` input frames (zeros if the input is late; excess latency is dropped).
+    fn read_input(&mut self, n: usize) {
+        let Some(tap) = self.input.as_mut() else { return };
+        let ch = tap.channels.max(1);
+        let available = tap.consumer.slots() / ch;
+        // Keep input-to-output latency bounded to ~4 blocks.
+        let excess = available.saturating_sub(n + 4 * MAX_BLOCK);
+        if excess > 0 {
+            for _ in 0..excess * ch {
+                let _ = tap.consumer.pop();
+            }
+            self.status.input_overruns.fetch_add(1, Ordering::Relaxed);
+        }
+        for i in 0..n {
+            let mut frame = [0.0f32; 2];
+            let mut ok = true;
+            for c in 0..ch {
+                match tap.consumer.pop() {
+                    Ok(x) => {
+                        if c < 2 {
+                            frame[c] = x;
+                        }
+                    }
+                    Err(_) => ok = false,
+                }
+            }
+            if !ok {
+                frame = [0.0; 2];
+            }
+            if ch == 1 {
+                frame[1] = frame[0];
+            }
+            self.in_l[i] = frame[0];
+            self.in_r[i] = frame[1];
         }
     }
 
@@ -456,8 +512,11 @@ impl Renderer {
         let sig = self.graph.time_signature;
         let gq = self.graph.global_quantize;
         let Some(t) = self.graph.tracks.get_mut(ti) else { return };
-        if t.kind != TrackKind::Midi {
+        if t.kind == TrackKind::Audio && on && (self.input.is_none() || self.rec.is_none() || self.rec_track.is_some()) {
             return;
+        }
+        if t.kind == TrackKind::Audio && on && t.slots.get(slot).is_some_and(Option::is_some) {
+            return; // audio overdub is not supported
         }
         if on {
             let playing_here = t.rt.launcher.playing.is_some_and(|p| p.slot == slot);
@@ -495,6 +554,12 @@ impl Renderer {
                     local_start: local,
                 };
                 self.sink().push(ev);
+            }
+            if self.rec_track == Some(ti) {
+                if let Some(tx) = self.rec.as_mut() {
+                    let _ = tx.push(crate::recorder::RecMsg::Stop);
+                }
+                self.rec_track = None;
             }
             self.sink().push(EngineEvent::RecordingStopped { track: ti as u16, slot: rec as u16, at: now });
         }
@@ -545,6 +610,7 @@ impl Renderer {
         let mut done = 0;
         while done < frames {
             let n = (frames - done).min(MAX_BLOCK);
+            self.read_input(n);
             self.render_chunk(n);
             for i in 0..n {
                 let base = (done + i) * channels;
@@ -569,6 +635,7 @@ impl Renderer {
         let mut done = 0;
         while done < l.len() {
             let n = (l.len() - done).min(MAX_BLOCK);
+            self.read_input(n);
             self.render_chunk(n);
             l[done..done + n].copy_from_slice(&self.master_l[..n]);
             r[done..done + n].copy_from_slice(&self.master_r[..n]);
@@ -660,6 +727,34 @@ impl Renderer {
                 apply_automation(t, b0);
             }
             render_track_source(t, ti, &span, sig, &mut sink);
+            if t.kind == TrackKind::Audio && self.input.is_some() {
+                let monitor = t.mixer.monitor == Monitor::In || (t.mixer.monitor == Monitor::Auto && t.mixer.arm);
+                let (il, ir) = (&self.in_l[at..at + n], &self.in_r[at..at + n]);
+                if monitor {
+                    for i in 0..n {
+                        t.l[i] += il[i];
+                        t.r[i] += ir[i];
+                    }
+                }
+                // Stream the take once its launch boundary has passed.
+                if let (Some(rec), Some(p)) = (t.rt.recording_slot, t.rt.launcher.playing) {
+                    if p.slot == rec && span.audible && (self.rec_track.is_none() || self.rec_track == Some(ti)) {
+                        if let Some(tx) = self.rec.as_mut() {
+                            let from = if p.started_at > span.b0 { span.offset(p.started_at, 0) } else { 0 };
+                            if self.rec_track.is_none() {
+                                let _ = tx.push(crate::recorder::RecMsg::Start { track: ti as u16, slot: rec as u16 });
+                                self.rec_track = Some(ti);
+                            }
+                            for i in from..n {
+                                if tx.push(crate::recorder::RecMsg::Frame(il[i], ir[i])).is_err() {
+                                    self.status.input_overruns.fetch_add(1, Ordering::Relaxed);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             let (gr, gr_r) = (&mut self.graph.return_l, &mut self.graph.return_r);
             process_track(t, n, &ctx, any_solo);
             for (k, (rl, rr)) in gr.iter_mut().zip(gr_r.iter_mut()).enumerate() {

@@ -2,3 +2,4 @@
 *.xdaw.autosave
 .DS_Store
 /dist
+/demo
