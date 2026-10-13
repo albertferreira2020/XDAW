@@ -77,3 +77,16 @@ Repository: `~/Documents/XDAW` (local git, branch `main`, no remote yet). REA li
   timing. Screenshots (`shot`) still need a visible window.
 - NEXT: rerun the 30-minute script (without `shot`) and record full statistics; then run the
   mouse-driven UI journey (step 1 above).
+
+## Timeline navigation and drag & drop (2026-10-13)
+
+- User feedback: timeline zoom, a horizontal scroll bar and sample drag & drop were missing.
+- Root cause for drag & drop: egui's `Response::dnd_release_payload::<T>()` **clears** a payload
+  of another type. Session slots asked for `SlotDrag` first, so Browser files dropped on a slot
+  were discarded (the Arrangement had the reverse problem for Session clips). Fixed at the source
+  with `browser::dnd_release`, used by every drop target.
+- Added `timeline.rs` (shared `HView` zoom/scroll + scroll bar + ruler zoom) used by the
+  Arrangement, piano roll and sample editor; `filedrop.rs` bridges Finder drops (winit 0.30 has
+  no drop position, so the pointer is read from Core Graphics during the drag).
+- Verified with the scripted UI (results in `FEATURE_MATRIX.md`); 94 tests pass. A real Finder
+  drag by a person is still unverified.

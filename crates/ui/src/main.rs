@@ -7,11 +7,13 @@ mod capture;
 mod clip_editor;
 mod devices;
 mod dialogs;
+mod filedrop;
 mod mixer;
 mod runtime;
 mod script;
 mod session;
 mod theme;
+mod timeline;
 mod transport;
 
 fn main() -> eframe::Result {

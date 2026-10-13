@@ -34,6 +34,14 @@ impl BrowserState {
     }
 }
 
+/// Takes the drag payload released on `resp` if it has type `T`.
+///
+/// `Response::dnd_release_payload` clears a payload of another type, so a
+/// target that accepts several payload kinds would lose the later ones.
+pub fn dnd_release<T: std::any::Any + Send + Sync>(resp: &egui::Response) -> Option<std::sync::Arc<T>> {
+    if egui::DragAndDrop::has_payload_of_type::<T>(&resp.ctx) { resp.dnd_release_payload::<T>() } else { None }
+}
+
 pub fn is_audio(p: &Path) -> bool {
     matches!(p.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref(), Some("wav" | "wave" | "aif" | "aiff" | "flac"))
 }
@@ -250,8 +258,9 @@ pub fn drop_file_on_slot(app: &mut XdawApp, track: usize, slot: usize, path: &Pa
             }
         }
     } else if is_audio(path) {
-        if kind != TrackKind::Audio {
-            app.status_line = "Audio files go on audio tracks (or drag onto a Sampler/Drum Rack)".into();
+        if kind == TrackKind::Midi {
+            // Like Live: a sample dropped on a MIDI track loads into a sampler.
+            load_into_instrument(app, track, path);
             return;
         }
         let seconds = match xdaw_engine::media::probe_duration(path) {
@@ -295,6 +304,31 @@ fn make_clip(app: &mut XdawApp, path: &Path, content: ClipContent, beats: f64, t
         transpose: 0,
         follow: Default::default(),
     }
+}
+
+/// Loads a sample on a MIDI track: the next free Drum Rack pad, else the
+/// track's Sampler, else a new Sampler.
+pub fn load_into_instrument(app: &mut XdawApp, track: usize, path: &Path) {
+    let r = TrackRef::Track(track);
+    let devices = &app.project.tracks[track].devices;
+    if let Some(i) = devices.iter().position(|d| d.kind == DeviceKind::DrumRack) {
+        let pad = devices[i].pads.iter().position(|p| p.is_none());
+        if let Some(pad) = pad {
+            assign_sample(app, r, i, Some(pad), path);
+            app.status_line = format!("Loaded on Drum Rack pad {}", pad + 1);
+            return;
+        }
+    }
+    let i = match app.project.tracks[track].devices.iter().position(|d| d.kind == DeviceKind::Sampler) {
+        Some(i) => i,
+        None => {
+            let id = app.project.add_device(r, DeviceKind::Sampler);
+            app.project.tracks[track].devices.iter().position(|d| d.id == id).unwrap_or(0)
+        }
+    };
+    assign_sample(app, r, i, None, path);
+    app.detail = crate::app::Detail::Devices;
+    app.status_line = "Sample loaded into Sampler".into();
 }
 
 /// Assigns a sample to a Sampler, or to a Drum Rack pad.

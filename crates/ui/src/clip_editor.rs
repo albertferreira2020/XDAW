@@ -2,6 +2,7 @@
 
 use crate::app::{ClipLoc, XdawApp};
 use crate::theme;
+use crate::timeline::{self, HView};
 use egui::{pos2, vec2, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Ui};
 use xdaw_engine::protocol::Command;
 use xdaw_project::*;
@@ -10,8 +11,9 @@ use xdaw_sequencer::{ClipQuantize, LaunchMode, Quantize};
 pub struct PianoState {
     pub key_h: f32,
     pub top_pitch: i32,
-    pub px_per_beat: f32,
-    pub scroll_beats: f64,
+    pub view: HView,
+    /// Note-grid width in the last frame (keyboard zoom).
+    pub width: f32,
     pub grid: f64,
     pub last_length: f64,
     drag: Option<NoteDrag>,
@@ -20,7 +22,23 @@ pub struct PianoState {
 
 impl Default for PianoState {
     fn default() -> Self {
-        Self { key_h: 9.0, top_pitch: 84, px_per_beat: 60.0, scroll_beats: 0.0, grid: 0.25, last_length: 0.25, drag: None, preview: None }
+        Self { key_h: 9.0, top_pitch: 84, view: HView::new(60.0, 4.0, 800.0), width: 600.0, grid: 0.25, last_length: 0.25, drag: None, preview: None }
+    }
+}
+
+/// Sample editor view; refits when another clip is shown.
+pub struct WaveState {
+    pub view: HView,
+    pub width: f32,
+    shown: Option<Id>,
+    /// Sample length in beats and the waveform's left edge, for the scroll bar.
+    total: f64,
+    left: f32,
+}
+
+impl Default for WaveState {
+    fn default() -> Self {
+        Self { view: HView::new(40.0, 0.5, 4000.0), width: 600.0, shown: None, total: 0.0, left: 0.0 }
     }
 }
 
@@ -227,7 +245,7 @@ pub fn copy_notes(app: &mut XdawApp) {
 }
 
 pub fn paste_notes(app: &mut XdawApp) {
-    let clip_beat = app.piano.scroll_beats.max(0.0);
+    let clip_beat = app.piano.view.scroll_beats.max(0.0);
     let pasted = app.clipboard.notes.clone();
     let at = {
         let Some(ClipContent::Midi { notes }) = app.selected_clip().map(|c| &c.content) else { return };
@@ -322,22 +340,42 @@ fn piano_roll(app: &mut XdawApp, ui: &mut Ui, loc: ClipLoc) {
             if ui.small_button("×2 loop").on_hover_text("Duplicate the loop and its notes").clicked() {
                 duplicate_loop(app);
             }
-            if ui.small_button("Fit").clicked() {
+            ui.separator();
+            if ui.small_button("−").on_hover_text("Zoom out (−)").clicked() {
+                let w = app.piano.width;
+                app.piano.view.zoom_at(0.8, w * 0.5);
+            }
+            if ui.small_button("+").on_hover_text("Zoom in (+)").clicked() {
+                let w = app.piano.width;
+                app.piano.view.zoom_at(1.25, w * 0.5);
+            }
+            if ui.small_button("Fit").on_hover_text("Show the whole clip").clicked() {
                 if let Some(c) = app.selected_clip() {
-                    let w = ui.available_width().max(200.0) - 40.0;
-                    app.piano.px_per_beat = (w / c.region.end.max(1.0) as f32).clamp(8.0, 400.0);
-                    app.piano.scroll_beats = 0.0;
+                    let end = c.region.end.max(1.0);
+                    let w = app.piano.width;
+                    app.piano.view.fit(0.0, end, w);
                 }
             }
             ui.label(egui::RichText::new("double-click: add/delete · drag: move · edge: resize · shift: fine/extend").size(10.0).color(theme::TEXT_DIM));
         });
-        let avail = ui.available_size();
-        let (rect, resp) = ui.allocate_exact_size(avail, Sense::click_and_drag());
+        let avail = ui.available_size() - vec2(0.0, timeline::SCROLLBAR_H + 2.0);
+        let (rect, resp) = ui.allocate_exact_size(avail.max(vec2(100.0, 80.0)), Sense::click_and_drag());
         let vel_h = 44.0;
         let keys = Rect::from_min_size(rect.min, vec2(40.0, rect.height() - vel_h));
         let grid = Rect::from_min_max(pos2(keys.right(), rect.top()), pos2(rect.right(), rect.bottom() - vel_h));
         let vel = Rect::from_min_max(pos2(keys.right(), grid.bottom()), rect.max);
+        app.piano.width = grid.width();
         roll(app, ui, &resp, keys, grid, vel, loc);
+        let content = app
+            .selected_clip()
+            .map(|c| match &c.content {
+                ClipContent::Midi { notes } => notes.iter().map(|n| n.start + n.length).fold(c.region.end, f64::max),
+                _ => c.region.end,
+            })
+            .unwrap_or(4.0)
+            + 4.0;
+        let w = grid.width();
+        timeline::scrollbar_row(ui, "piano", &mut app.piano.view, grid.left(), w, content);
     });
 }
 
@@ -359,16 +397,12 @@ fn is_black(p: i32) -> bool {
 fn roll(app: &mut XdawApp, ui: &mut Ui, resp: &egui::Response, keys: Rect, grid: Rect, vel: Rect, loc: ClipLoc) {
     let st = &mut app.piano;
     // Scroll/zoom.
-    if resp.hovered() {
-        let (scroll, mods) = ui.input(|i| (i.smooth_scroll_delta, i.modifiers));
-        if mods.command {
-            st.px_per_beat = (st.px_per_beat * (1.0 + scroll.y * 0.003)).clamp(8.0, 600.0);
-        } else {
-            st.scroll_beats = (st.scroll_beats - (scroll.x / st.px_per_beat) as f64).max(0.0);
-            st.top_pitch = (st.top_pitch as f32 + scroll.y / st.key_h).round().clamp(12.0, 127.0) as i32;
-        }
+    // Pinch/Cmd+wheel zoom, horizontal wheel scrolls time, vertical wheel scrolls pitch.
+    let dy = st.view.wheel(ui, resp.hovered(), grid);
+    if dy != 0.0 {
+        st.top_pitch = (st.top_pitch as f32 + dy / st.key_h).round().clamp(12.0, 127.0) as i32;
     }
-    let (ppb, key_h, top, sb, gsize) = (st.px_per_beat, st.key_h, st.top_pitch, st.scroll_beats, st.grid);
+    let (ppb, key_h, top, sb, gsize) = (st.view.px_per_beat, st.key_h, st.top_pitch, st.view.scroll_beats, st.grid);
     let x_of = |b: f64| grid.left() + ((b - sb) as f32) * ppb;
     let beat_of = |x: f32| sb + ((x - grid.left()) / ppb) as f64;
     let y_of = |pitch: i32| grid.top() + (top - pitch) as f32 * key_h;
@@ -617,7 +651,33 @@ fn roll(app: &mut XdawApp, ui: &mut Ui, resp: &egui::Response, keys: Rect, grid:
 fn audio_view(app: &mut XdawApp, ui: &mut Ui) {
     let Some(clip) = app.selected_clip().cloned() else { return };
     let ClipContent::Audio(a) = &clip.content else { return };
-    let (rect, resp) = ui.allocate_exact_size(ui.available_size(), Sense::click_and_drag());
+    ui.vertical(|ui| {
+        app.wave.total = 0.0;
+        audio_view_inner(app, ui, &clip, a);
+        if app.wave.total > 0.0 {
+            let (left, width, total) = (app.wave.left, app.wave.width, app.wave.total);
+            timeline::scrollbar_row(ui, "wave", &mut app.wave.view, left, width, total);
+        }
+    });
+}
+
+fn audio_view_inner(app: &mut XdawApp, ui: &mut Ui, clip: &Clip, a: &AudioContent) {
+    ui.horizontal(|ui| {
+        if ui.small_button("−").on_hover_text("Zoom out (−)").clicked() {
+            let w = app.wave.width;
+            app.wave.view.zoom_at(0.8, w * 0.5);
+        }
+        if ui.small_button("+").on_hover_text("Zoom in (+)").clicked() {
+            let w = app.wave.width;
+            app.wave.view.zoom_at(1.25, w * 0.5);
+        }
+        if ui.small_button("Fit").on_hover_text("Show the whole sample").clicked() {
+            app.wave.shown = None;
+        }
+        ui.label(egui::RichText::new("pinch/Cmd+wheel: zoom · wheel/scroll bar: scroll · double-click: warp marker · drag: S/L/E").size(10.0).color(theme::TEXT_DIM));
+    });
+    let avail = ui.available_size() - vec2(0.0, timeline::SCROLLBAR_H + 2.0);
+    let (rect, resp) = ui.allocate_exact_size(avail.max(vec2(100.0, 40.0)), Sense::click_and_drag());
     let p = ui.painter_at(rect);
     p.rect_filled(rect, 0.0, theme::PANEL_DARK);
     let (Some(ov), Some(data)) = (app.media.overviews.get(&a.media.path).cloned(), app.media.loaded.get(&a.media.path).cloned()) else {
@@ -628,18 +688,48 @@ fn audio_view(app: &mut XdawApp, ui: &mut Ui) {
         p.text(rect.center(), Align2::CENTER_CENTER, msg, FontId::proportional(12.0), theme::RECORD);
         return;
     };
-    let total_beats = data.duration_seconds() * a.source_bpm / 60.0;
-    let x_of = |b: f64| rect.left() + (b / total_beats.max(1e-6)) as f32 * rect.width();
-    let beat_of = |x: f32| ((x - rect.left()) / rect.width()) as f64 * total_beats;
+    let total_beats = (data.duration_seconds() * a.source_bpm / 60.0).max(1e-6);
+    app.wave.width = rect.width();
+    app.wave.left = rect.left();
+    app.wave.total = total_beats;
+    if app.wave.shown != Some(clip.id) {
+        app.wave.shown = Some(clip.id);
+        app.wave.view.fit(0.0, total_beats, rect.width());
+    }
+    app.wave.view.wheel(ui, resp.hovered(), rect);
+    let view = app.wave.view;
+    let x_of = |b: f64| view.x(rect, b);
+    let beat_of = |x: f32| view.beat(rect, x);
     let mid = rect.center().y;
     let h = rect.height() * 0.45;
     let color = theme::rgb(clip.color);
+    // Overview bins cover the whole file; each pixel takes the min/max of its bins.
+    let bins = ov.len().max(1) as f64;
     for px in 0..rect.width() as usize {
-        let idx = px * ov.len() / rect.width().max(1.0) as usize;
-        if let Some(&(lo, hi)) = ov.get(idx) {
+        let b0 = beat_of(rect.left() + px as f32);
+        let b1 = beat_of(rect.left() + px as f32 + 1.0);
+        if b1 <= 0.0 || b0 >= total_beats {
+            continue;
+        }
+        let i0 = ((b0 / total_beats) * bins).floor().max(0.0) as usize;
+        let i1 = (((b1 / total_beats) * bins).ceil() as usize).clamp(i0 + 1, ov.len());
+        let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+        for &(l, h) in &ov[i0.min(ov.len().saturating_sub(1))..i1] {
+            lo = lo.min(l);
+            hi = hi.max(h);
+        }
+        if lo <= hi {
             let x = rect.left() + px as f32;
             p.line_segment([pos2(x, mid - hi * h), pos2(x, mid - lo * h)], Stroke::new(1.0, color));
         }
+    }
+    // Beat grid (bars brighter).
+    let step = if view.px_per_beat > 24.0 { 1.0 } else if view.px_per_beat > 6.0 { 4.0 } else { 16.0 };
+    let mut gb = (view.scroll_beats / step).floor() * step;
+    while x_of(gb) < rect.right() {
+        let x = x_of(gb);
+        p.line_segment([pos2(x, rect.top()), pos2(x, rect.top() + 6.0)], Stroke::new(1.0, theme::GRID));
+        gb += step;
     }
     let r = clip.region;
     p.rect_filled(Rect::from_min_max(pos2(x_of(r.end), rect.top()), rect.max), 0.0, Color32::from_black_alpha(120));

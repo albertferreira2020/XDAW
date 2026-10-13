@@ -17,6 +17,38 @@ pub struct Script {
     pub inject: std::collections::VecDeque<Vec<egui::Event>>,
     /// Wall clock: egui input time freezes while the window is hidden.
     started: std::time::Instant,
+    /// Simulated OS file drags, one frame each (consumed in `raw_input_hook`).
+    pub os: std::collections::VecDeque<OsFrame>,
+}
+
+/// One frame of a simulated Finder drag: files hovering at `pos`, or dropped there.
+pub struct OsFrame {
+    pub pos: egui::Pos2,
+    pub hovered: Vec<std::path::PathBuf>,
+    pub dropped: Vec<std::path::PathBuf>,
+}
+
+#[derive(Debug)]
+struct ScriptFile(std::path::PathBuf);
+
+impl egui::DroppedFile for ScriptFile {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|e| e.to_string())
+    }
+}
+
+impl OsFrame {
+    /// Writes this frame into the raw input exactly as the winit backend would.
+    pub fn apply(self, raw: &mut egui::RawInput) {
+        raw.hovered_files = self.hovered.into_iter().map(|p| egui::HoveredFile { path: Some(p), mime: String::new() }).collect();
+        for p in self.dropped {
+            raw.dropped_files.push(std::sync::Arc::new(ScriptFile(p)));
+        }
+    }
 }
 
 fn pointer(x: f32, y: f32) -> egui::Event {
@@ -54,6 +86,7 @@ impl Script {
             pending_shot: false,
             inject: Default::default(),
             started: std::time::Instant::now(),
+            os: Default::default(),
         })
     }
 
@@ -77,7 +110,7 @@ impl Script {
             }
             self.pending_shot = false;
         }
-        if self.pending_shot || now < self.wait_until || !self.inject.is_empty() {
+        if self.pending_shot || now < self.wait_until || !self.inject.is_empty() || !self.os.is_empty() {
             ctx.request_repaint();
             return;
         }
@@ -145,6 +178,56 @@ impl Script {
                     ctx.request_repaint();
                     return;
                 }
+                "wheel" | "pinch" => {
+                    let (x, y) = (num(0) as f32, num(1) as f32);
+                    let modifiers = egui::Modifiers { shift: args.contains(&"shift"), alt: args.contains(&"alt"), command: args.contains(&"cmd"), mac_cmd: args.contains(&"cmd"), ..Default::default() };
+                    self.inject.push_back(vec![pointer(x, y)]);
+                    let ev = if cmd == "pinch" {
+                        egui::Event::Zoom(num(2) as f32)
+                    } else {
+                        egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(num(2) as f32, num(3) as f32), phase: egui::TouchPhase::Move, modifiers }
+                    };
+                    // Held modifiers reach egui as frame state, like a real keyboard.
+                    self.inject.push_back(vec![egui::Event::ModifiersChanged(modifiers), ev]);
+                    self.inject.push_back(vec![egui::Event::ModifiersChanged(egui::Modifiers::NONE)]);
+                    ctx.request_repaint();
+                    return;
+                }
+                "osdrop" => {
+                    // osdrop x y path [path...]: Finder drag hovering at (x, y), then dropped there.
+                    let pos = egui::pos2(num(0) as f32, num(1) as f32);
+                    let files: Vec<std::path::PathBuf> = args.iter().skip(2).map(std::path::PathBuf::from).collect();
+                    for _ in 0..3 {
+                        self.os.push_back(OsFrame { pos, hovered: files.clone(), dropped: vec![] });
+                    }
+                    self.os.push_back(OsFrame { pos, hovered: vec![], dropped: files });
+                    self.os.push_back(OsFrame { pos, hovered: vec![], dropped: vec![] });
+                    ctx.request_repaint();
+                    return;
+                }
+                "zoominfo" => {
+                    let a = &app.arr.view;
+                    println!(
+                        "[script] zoom arr_ppb={:.3} arr_scroll={:.3} lane_h={:.1} follow={} piano_ppb={:.3} piano_scroll={:.3} wave_ppb={:.3} wave_scroll={:.3}",
+                        a.px_per_beat, a.scroll_beats, app.arr.lane_h, app.follow, app.piano.view.px_per_beat, app.piano.view.scroll_beats, app.wave.view.px_per_beat, app.wave.view.scroll_beats
+                    );
+                }
+                "slots" => {
+                    let t = (num(0) as usize).saturating_sub(1);
+                    if let Some(tr) = app.project.tracks.get(t) {
+                        println!("[script] slots track {} {:?}", t + 1, tr.slots.iter().map(|s| s.clip.as_ref().map(|c| c.name.clone())).collect::<Vec<_>>());
+                    }
+                }
+                "tracks" => {
+                    let v: Vec<String> = app
+                        .project
+                        .tracks
+                        .iter()
+                        .map(|t| format!("{} [{}]", t.name, t.devices.iter().map(|d| format!("{:?}{}", d.kind, d.sample.as_ref().map(|m| format!("={}", m.path)).unwrap_or_default())).collect::<Vec<_>>().join(",")))
+                        .collect();
+                    println!("[script] tracks {} {:?} scenes={}", v.len(), v, app.project.scenes.len());
+                }
+                "status" => println!("[script] status {}", app.status_line),
                 "notes" => {
                     let n = app.selected_clip().map(|c| match &c.content {
                         xdaw_project::ClipContent::Midi { notes } => format!("{:?}", notes.iter().map(|n| (n.pitch, n.start, n.length)).collect::<Vec<_>>()),

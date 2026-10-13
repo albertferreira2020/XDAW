@@ -44,14 +44,21 @@ Platform: macOS 26.6.2, Apple M5, built-in output at 48 kHz. Windows/Linux: **no
 | Select next scene on launch | L10 §7.2 | Implemented, unverified | |
 | Scene name tempo/time signature ("96 BPM", "7/8") | L10 §7.2 | Verified (parser) | `scene_names_parse_like_live_10` |
 | Capture and Insert Scene | L10 §7.4.3 | Implemented, unverified | |
-| Duplicate/rename/color/move/copy clips, drag & drop | L10 §7.4 | Implemented, unverified (UI) | |
+| Duplicate/rename/color/move/copy clips, drag & drop | L10 §7.4 | Partial: drops verified (scripted UI); rename/color/move unverified | Browser → slot (`bass.wav` on Drums slot 1); Finder drop of 2 files → consecutive slots, scene added; drop zone → new track; undo |
+| Samples dragged from Finder (OS file drop) onto slots, lanes, drop zones, Sampler/Drum Rack | Own (Live 10 §5 behaviour) | Verified (simulated OS drop through the same raw-input path); real Finder drag unverified | `filedrop.rs`; script `osdrop`; macOS pointer read via Core Graphics during the drag |
+| Audio file dropped on a MIDI track loads an instrument | L10 §5 | Verified (scripted UI) | drop on Beat → "Loaded on Drum Rack pad 9" |
 | Follow Actions (No Action, Stop, Play Again, Previous, Next, First, Last, Any, Other; chances A/B; group = adjacent clips) | L10 §13.6 | Verified (engine); UI controls unverified | `follow_actions_chain_clips_at_exact_times_and_stop`, sequencer follow tests; Previous wrap at group top is an inference |
 
 ## Arrangement View
 
 | Feature | Reference | Status | Evidence / notes |
 | --- | --- | --- | --- |
-| Timeline, ruler, playhead, follow, zoom, snap | L10 §6 | Verified (render) | screenshot `s3.png` |
+| Timeline, ruler, playhead, follow, snap | L10 §6 | Verified (render) | screenshot `s3.png` |
+| Horizontal zoom: pinch, Cmd+wheel, +/−, slider, ruler vertical drag, Sel (Z), All (Shift+Z) | L10 §6.2 | Verified (scripted UI) | ppb 18 → 29.7 (Cmd+wheel) → 59.4 (pinch) → 47.5 (−) → fit; ruler drag 16.6 → 27.7; `timeline` unit tests |
+| Horizontal scroll bar (drag thumb, drag ends to zoom, click trough), Shift/horizontal wheel | Own | Verified (scripted UI) | thumb drag scroll 9.8 → 18.0; wheel scrolls; manual scroll while playing turns Follow off |
+| Track height (slider, Alt+wheel) | L10 §6 | Verified (scripted UI) | 56 → 63.1 |
+| Clip names stay visible when a clip starts left of the view | L10 §6 | Verified (render) | screenshot |
+| Piano roll and sample editor zoom/scroll bars | L10 §9/§10 | Verified (scripted UI) | piano + key; waveform ppb 40 → 205.7 and scroll; screenshot |
 | Waveforms and MIDI note previews | L10 §6 | Verified (render) | screenshot |
 | Move, trim, split, duplicate, copy/paste, delete clips | L10 §6 | Implemented, unverified (UI interactions) | `clear_arrangement_range` model test |
 | Fades (in/out handles) | L10 §6 | Implemented; playback math covered by edge declick | |

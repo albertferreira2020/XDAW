@@ -42,7 +42,10 @@ pub fn show(app: &mut XdawApp, ui: &mut Ui) {
                 let (rect, resp) = ui.allocate_exact_size(vec2(70.0, HEADER_H + SLOT_H * scenes as f32), Sense::hover());
                 ui.painter().rect_stroke(rect, 2.0, Stroke::new(1.0, theme::GRID), StrokeKind::Inside);
                 ui.painter().text(rect.center(), Align2::CENTER_CENTER, "Drop to\ncreate\ntrack", FontId::proportional(10.0), theme::TEXT_DIM);
-                if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
+                if resp.dnd_hover_payload::<BrowserItem>().is_some() {
+                    ui.painter().rect_stroke(rect, 2.0, Stroke::new(2.0, theme::ACCENT), StrokeKind::Inside);
+                }
+                if let Some(item) = crate::browser::dnd_release::<BrowserItem>(&resp) {
                     create_track_from(app, (*item).clone());
                 }
             });
@@ -75,7 +78,34 @@ pub fn show(app: &mut XdawApp, ui: &mut Ui) {
     });
 }
 
-fn create_track_from(app: &mut XdawApp, item: BrowserItem) {
+/// Places a file in slot `s` and any further files of the same drop in the
+/// following slots, adding scenes when needed.
+pub fn drop_files_from_slot(app: &mut XdawApp, t: usize, s: usize, first: &std::path::Path) {
+    let mut paths = vec![first.to_path_buf()];
+    paths.extend(std::mem::take(&mut app.extra_drop));
+    for (i, p) in paths.iter().enumerate() {
+        let slot = s + i;
+        while slot >= app.project.scenes.len() {
+            let n = app.project.scenes.len() + 1;
+            app.project.add_scene(&n.to_string());
+        }
+        browser::drop_file_on_slot(app, t, slot, p);
+    }
+}
+
+/// New track suited to a dropped file: MIDI files get a MIDI track with a synth.
+pub fn new_track_for_file(app: &mut XdawApp, p: &std::path::Path) -> usize {
+    let kind = if browser::is_midi(p) { TrackKind::Midi } else { TrackKind::Audio };
+    let n = app.project.tracks.len() + 1;
+    let t = app.project.add_track(kind, &format!("{n} {}", if kind == TrackKind::Midi { "MIDI" } else { "Audio" }));
+    if kind == TrackKind::Midi {
+        app.project.add_device(TrackRef::Track(t), xdaw_dsp::DeviceKind::PolySynth);
+    }
+    app.label("Create Track");
+    t
+}
+
+pub fn create_track_from(app: &mut XdawApp, item: BrowserItem) {
     match item {
         BrowserItem::Device(k) => {
             let kind = if k.is_instrument() { TrackKind::Midi } else { TrackKind::Audio };
@@ -85,13 +115,8 @@ fn create_track_from(app: &mut XdawApp, item: BrowserItem) {
             app.label("Create Track");
         }
         BrowserItem::File(p) => {
-            let kind = if browser::is_midi(&p) { TrackKind::Midi } else { TrackKind::Audio };
-            let n = app.project.tracks.len() + 1;
-            let t = app.project.add_track(kind, &format!("{n} {}", if kind == TrackKind::Midi { "MIDI" } else { "Audio" }));
-            if kind == TrackKind::Midi {
-                app.project.add_device(TrackRef::Track(t), xdaw_dsp::DeviceKind::PolySynth);
-            }
-            browser::drop_file_on_slot(app, t, 0, &p);
+            let t = new_track_for_file(app, &p);
+            drop_files_from_slot(app, t, 0, &p);
         }
         BrowserItem::Preset(_) => {}
     }
@@ -116,7 +141,7 @@ pub fn track_header(app: &mut XdawApp, ui: &mut Ui, r: TrackRef) {
         app.select_track(r);
         app.detail = Detail::Devices;
     }
-    if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
+    if let Some(item) = crate::browser::dnd_release::<BrowserItem>(&resp) {
         match (*item).clone() {
             BrowserItem::Device(k) => browser::add_device(app, r, k),
             BrowserItem::Preset(path) => browser::load_preset(app, r, &path),
@@ -391,13 +416,13 @@ fn slot(app: &mut XdawApp, ui: &mut Ui, t: usize, s: usize) {
     if has_clip && resp.drag_started() && !on_button {
         resp.dnd_set_drag_payload(SlotDrag { track: t, slot: s });
     }
-    if let Some(drag) = resp.dnd_release_payload::<SlotDrag>() {
+    if let Some(drag) = crate::browser::dnd_release::<SlotDrag>(&resp) {
         let copy = ui.input(|i| i.modifiers.alt || i.modifiers.command);
         move_clip(app, *drag, t, s, copy);
     }
-    if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
+    if let Some(item) = crate::browser::dnd_release::<BrowserItem>(&resp) {
         match (*item).clone() {
-            BrowserItem::File(path) => browser::drop_file_on_slot(app, t, s, &path),
+            BrowserItem::File(path) => drop_files_from_slot(app, t, s, &path),
             BrowserItem::Device(k) => browser::add_device(app, TrackRef::Track(t), k),
             BrowserItem::Preset(path) => browser::load_preset(app, TrackRef::Track(t), &path),
         }

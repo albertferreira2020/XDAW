@@ -33,7 +33,7 @@ pub fn show(app: &mut XdawApp, ui: &mut Ui) {
             let (rect, resp) = ui.allocate_exact_size(vec2(90.0, 180.0), egui::Sense::hover());
             ui.painter().rect_stroke(rect, 3.0, egui::Stroke::new(1.0, theme::GRID), egui::StrokeKind::Inside);
             ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "Drop\ndevice", egui::FontId::proportional(11.0), theme::TEXT_DIM);
-            if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
+            if let Some(item) = crate::browser::dnd_release::<BrowserItem>(&resp) {
                 match (*item).clone() {
                     BrowserItem::Device(k) => browser::add_device(app, r, k),
                     BrowserItem::Preset(p) => browser::load_preset(app, r, &p),
@@ -261,7 +261,7 @@ fn sample_slot(app: &mut XdawApp, ui: &mut Ui, r: TrackRef, device: usize, pad: 
             browser::assign_sample(app, r, device, pad, &p);
         }
     }
-    if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
+    if let Some(item) = crate::browser::dnd_release::<BrowserItem>(&resp) {
         if let BrowserItem::File(p) = (*item).clone() {
             if browser::is_audio(&p) {
                 browser::assign_sample(app, r, device, pad, &p);

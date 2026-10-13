@@ -8,6 +8,8 @@
   Quantize, computer keyboard (KB), KEY and MIDI map modes, CPU meter, Session/Arrangement switch.
 - **Browser** (left): instruments, effects, presets, the current project folder and added folders.
   Drag items onto slots, track headers, the device area or the empty "drop to create track" column;
+  files can also be dragged straight from Finder (several files fill consecutive slots). A sample
+  dropped on a MIDI track loads into its Drum Rack (next free pad) or a Sampler;
   double-click loads onto the selected track/slot.
 - **Main area**: Session or Arrangement (Tab switches).
 - **Detail panel** (bottom): Clip (properties, piano roll or audio regions) or Devices.
@@ -30,7 +32,15 @@
 ## Arrangement View
 
 - Click the ruler to locate; drag in the thin band above it to set the loop, double-click it to
-  toggle looping.
+  toggle looping. Drag the ruler up/down to zoom and sideways to scroll.
+- Zoom: pinch or Cmd+wheel over the timeline, `+`/`−`, the Zoom slider, **Sel** (`Z`, zoom to the
+  selected clips or the loop) and **All** (`Shift+Z`, whole song). `Z` is the octave key while the
+  computer MIDI keyboard (KB) is on.
+- Scroll: the scroll bar under the timeline (drag the thumb; drag its ends to zoom; click the
+  trough to jump), Shift+wheel or a horizontal trackpad swipe. Scrolling by hand while playing turns
+  Follow off. Track height: the Height slider or Alt+wheel.
+- Drop samples or MIDI files from the Browser or from Finder onto a lane (placed at the pointer,
+  several files one after another) or onto the area under the last track to create a new track.
 - Drag clips to move, drag edges to trim, drag the top corners to set fades. Cmd+E splits
   selected clips at the insert marker; Cmd+C/V copy/paste at the marker; Cmd+D duplicates.
 - Choose an automation parameter in a track header to show its envelope. Cmd-click or double-click

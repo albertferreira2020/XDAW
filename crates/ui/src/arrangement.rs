@@ -3,6 +3,7 @@
 use crate::app::{ClipLoc, Detail, XdawApp};
 use crate::browser::{self, BrowserItem};
 use crate::theme;
+use crate::timeline::{self, HView};
 use egui::{pos2, vec2, Align2, Color32, FontId, Pos2, Rect, Sense, Stroke, StrokeKind, Ui};
 use std::collections::HashMap;
 use xdaw_engine::protocol::Command;
@@ -14,19 +15,22 @@ const RULER_H: f32 = 34.0;
 const EDGE: f32 = 6.0;
 
 pub struct ArrangementState {
-    pub px_per_beat: f32,
-    pub scroll_beats: f64,
+    pub view: HView,
     pub snap: f64,
     pub cursor: Beats,
     pub lane_h: f32,
     /// Automation lane shown per track id.
     pub lane: HashMap<Id, ParamTarget>,
+    /// Timeline width in the last frame (for keyboard zoom and the scroll bar).
+    pub width: f32,
+    /// The view moved this frame because of Follow or zoom, not a manual scroll.
+    following: bool,
     drag: Option<Drag>,
 }
 
 impl Default for ArrangementState {
     fn default() -> Self {
-        Self { px_per_beat: 18.0, scroll_beats: 0.0, snap: 1.0, cursor: 0.0, lane_h: 56.0, lane: HashMap::new(), drag: None }
+        Self { view: HView::new(18.0, 0.5, 600.0), snap: 1.0, cursor: 0.0, lane_h: 56.0, lane: HashMap::new(), width: 800.0, following: false, drag: None }
     }
 }
 
@@ -49,11 +53,11 @@ struct Drag {
 
 impl ArrangementState {
     fn x(&self, rect: Rect, beat: Beats) -> f32 {
-        rect.left() + ((beat - self.scroll_beats) as f32) * self.px_per_beat
+        self.view.x(rect, beat)
     }
 
     fn beat(&self, rect: Rect, x: f32) -> Beats {
-        self.scroll_beats + ((x - rect.left()) / self.px_per_beat) as f64
+        self.view.beat(rect, x)
     }
 
     fn snap(&self, b: Beats, bypass: bool) -> Beats {
@@ -137,25 +141,47 @@ pub fn show(app: &mut XdawApp, ui: &mut Ui) {
                 ui.selectable_value(&mut app.arr.snap, s, snap_label(s));
             }
         });
-        if ui.small_button("−").on_hover_text("Zoom out").clicked() {
-            app.arr.px_per_beat = (app.arr.px_per_beat / 1.25).max(2.0);
+        ui.separator();
+        ui.label("Zoom");
+        if ui.small_button("−").on_hover_text("Zoom out (−)").clicked() {
+            zoom_step(app, 0.8);
         }
-        if ui.small_button("+").on_hover_text("Zoom in").clicked() {
-            app.arr.px_per_beat = (app.arr.px_per_beat * 1.25).min(400.0);
+        let mut z = app.arr.view.px_per_beat;
+        let slider = egui::Slider::new(&mut z, app.arr.view.min_ppb..=app.arr.view.max_ppb).logarithmic(true).show_value(false);
+        if ui.add_sized(vec2(90.0, 16.0), slider).on_hover_text("Horizontal zoom · pinch or Cmd+wheel over the timeline").changed() {
+            zoom_step(app, z / app.arr.view.px_per_beat);
         }
+        if ui.small_button("+").on_hover_text("Zoom in (+)").clicked() {
+            zoom_step(app, 1.25);
+        }
+        if ui.small_button("Sel").on_hover_text("Zoom to selection, or to the loop (Z)").clicked() {
+            zoom_to_selection(app);
+        }
+        if ui.small_button("All").on_hover_text("Zoom to the whole song (Shift+Z)").clicked() {
+            zoom_to_song(app);
+        }
+        ui.separator();
+        ui.label("Height");
+        ui.add_sized(vec2(60.0, 16.0), egui::Slider::new(&mut app.arr.lane_h, LANE_MIN..=LANE_MAX).show_value(false))
+            .on_hover_text("Track height · Alt+wheel over the timeline");
+        ui.separator();
         ui.label(egui::RichText::new(format!("Insert marker {:.2}", app.arr.cursor)).color(theme::TEXT_DIM));
         if ui.small_button("Split at marker (Cmd+E)").clicked() {
             split_selected(app);
         }
         ui.checkbox(&mut app.follow, "Follow");
     });
+    let before = app.arr.view;
     let rows = app.project.tracks.len();
-    let total_h = RULER_H + rows as f32 * app.arr.lane_h + 40.0;
-    egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+    let total_h = RULER_H + rows as f32 * app.arr.lane_h + DROP_H + 8.0;
+    let left = ui.max_rect().left();
+    let area_h = (ui.available_height() - timeline::SCROLLBAR_H - 4.0).max(60.0);
+    egui::ScrollArea::vertical().id_salt("arr_scroll").max_height(area_h).auto_shrink([false, false]).show(ui, |ui| {
         let width = ui.available_width();
-        let (outer, resp) = ui.allocate_exact_size(vec2(width, total_h.max(ui.available_height())), Sense::click_and_drag());
+        let (outer, resp) = ui.allocate_exact_size(vec2(width, total_h.max(area_h)), Sense::click_and_drag());
         let timeline = Rect::from_min_max(pos2(outer.left() + HEADER_W, outer.top()), outer.max);
-        handle_scroll_zoom(app, ui, &resp, timeline);
+        app.arr.width = timeline.width();
+        handle_wheel(app, ui, &resp, timeline);
         follow_playhead(app, timeline);
         draw_ruler(app, ui, timeline);
         for t in 0..rows {
@@ -165,6 +191,8 @@ pub fn show(app: &mut XdawApp, ui: &mut Ui) {
             track_header(app, ui, t, header);
             track_lane(app, ui, t, lane);
         }
+        let drop_top = outer.top() + RULER_H + rows as f32 * app.arr.lane_h + 4.0;
+        drop_zone(app, ui, Rect::from_min_max(pos2(outer.left(), drop_top), pos2(timeline.right(), drop_top + DROP_H)), timeline);
         // Playhead and insert marker over everything.
         let p = ui.painter_at(timeline);
         let x = app.arr.x(timeline, app.beat());
@@ -175,6 +203,57 @@ pub fn show(app: &mut XdawApp, ui: &mut Ui) {
             app.arr.drag = None;
         }
     });
+    let content = content_end(app) + 8.0 * app.project.transport.time_signature.bar_beats();
+    let width = app.arr.width;
+    timeline::scrollbar_row(ui, "arr", &mut app.arr.view, left + HEADER_W, width, content);
+    // Scrolling by hand while playing stops Follow, as in Live.
+    let v = app.arr.view;
+    if app.playing() && app.follow && v.px_per_beat == before.px_per_beat && v.scroll_beats != before.scroll_beats && !app.arr.following {
+        app.follow = false;
+    }
+    app.arr.following = false;
+}
+
+const DROP_H: f32 = 48.0;
+const LANE_MIN: f32 = 24.0;
+const LANE_MAX: f32 = 200.0;
+
+/// End of the material the view should be able to reach.
+fn content_end(app: &XdawApp) -> Beats {
+    let t = &app.project.transport;
+    song_end(&app.project).max(t.loop_start + t.loop_length).max(app.arr.cursor).max(app.beat())
+}
+
+/// Zooms around the playhead when it is visible, else around the view centre.
+pub fn zoom_step(app: &mut XdawApp, factor: f32) {
+    let w = app.arr.width.max(1.0);
+    let px = (app.arr.view.x(Rect::from_min_size(Pos2::ZERO, vec2(w, 1.0)), app.beat())).clamp(-1.0, w + 1.0);
+    let anchor = if (0.0..=w).contains(&px) { px } else { w * 0.5 };
+    app.arr.view.zoom_at(factor, anchor);
+}
+
+pub fn zoom_to_song(app: &mut XdawApp) {
+    let end = content_end(app).max(app.project.transport.time_signature.bar_beats() * 4.0);
+    app.arr.view.fit(0.0, end, app.arr.width.max(1.0));
+}
+
+pub fn zoom_to_selection(app: &mut XdawApp) {
+    let spans: Vec<(Beats, Beats)> = app
+        .sel
+        .arr_clips
+        .iter()
+        .filter_map(|&(t, id)| app.project.tracks.get(t)?.arrangement.iter().find(|c| c.id == id).map(|c| (c.start, c.end())))
+        .collect();
+    let range = if spans.is_empty() {
+        let t = &app.project.transport;
+        if t.loop_length > 0.0 { Some((t.loop_start, t.loop_start + t.loop_length)) } else { None }
+    } else {
+        Some((spans.iter().map(|s| s.0).fold(f64::INFINITY, f64::min), spans.iter().map(|s| s.1).fold(0.0, f64::max)))
+    };
+    match range {
+        Some((a, b)) => app.arr.view.fit(a, b, app.arr.width.max(1.0)),
+        None => zoom_to_song(app),
+    }
 }
 
 fn snap_label(s: f64) -> String {
@@ -189,21 +268,18 @@ fn snap_label(s: f64) -> String {
     }
 }
 
-fn handle_scroll_zoom(app: &mut XdawApp, ui: &Ui, resp: &egui::Response, timeline: Rect) {
-    if !resp.hovered() {
+fn handle_wheel(app: &mut XdawApp, ui: &mut Ui, resp: &egui::Response, timeline: Rect) {
+    let hovered = resp.contains_pointer();
+    if hovered && ui.input(|i| i.modifiers.alt && i.smooth_scroll_delta.y != 0.0) {
+        // Alt+wheel: track height; keep the vertical scroll area still.
+        let dy = ui.input_mut(|i| std::mem::take(&mut i.smooth_scroll_delta.y));
+        app.arr.lane_h = (app.arr.lane_h * (1.0 + dy * 0.004)).clamp(LANE_MIN, LANE_MAX);
         return;
     }
-    let (scroll, zoom, mods, hover) = ui.input(|i| (i.smooth_scroll_delta, i.zoom_delta(), i.modifiers, i.pointer.hover_pos()));
-    if zoom != 1.0 || (mods.command && scroll.y != 0.0) {
-        let factor = if zoom != 1.0 { zoom } else { (1.0 + scroll.y * 0.003).clamp(0.5, 2.0) };
-        let anchor = hover.map(|p| app.arr.beat(timeline, p.x)).unwrap_or(app.arr.scroll_beats);
-        app.arr.px_per_beat = (app.arr.px_per_beat * factor).clamp(2.0, 400.0);
-        if let Some(p) = hover {
-            app.arr.scroll_beats = (anchor - ((p.x - timeline.left()) / app.arr.px_per_beat) as f64).max(0.0);
-        }
-    } else if scroll.x != 0.0 || mods.shift {
-        let dx = if scroll.x != 0.0 { scroll.x } else { scroll.y };
-        app.arr.scroll_beats = (app.arr.scroll_beats - (dx / app.arr.px_per_beat) as f64).max(0.0);
+    let before = app.arr.view;
+    app.arr.view.wheel(ui, hovered, timeline);
+    if app.arr.view != before && app.arr.view.px_per_beat != before.px_per_beat {
+        app.arr.following = true; // zooming is not a manual scroll
     }
 }
 
@@ -211,10 +287,11 @@ fn follow_playhead(app: &mut XdawApp, timeline: Rect) {
     if !(app.follow && app.playing()) {
         return;
     }
-    let visible = (timeline.width() / app.arr.px_per_beat) as f64;
+    let visible = app.arr.view.visible_beats(timeline.width());
     let b = app.beat();
-    if b < app.arr.scroll_beats || b > app.arr.scroll_beats + visible * 0.9 {
-        app.arr.scroll_beats = (b - visible * 0.1).max(0.0);
+    if b < app.arr.view.scroll_beats || b > app.arr.view.scroll_beats + visible * 0.9 {
+        app.arr.view.scroll_beats = (b - visible * 0.1).max(0.0);
+        app.arr.following = true;
     }
 }
 
@@ -226,10 +303,10 @@ fn draw_ruler(app: &mut XdawApp, ui: &mut Ui, timeline: Rect) {
     p.rect_filled(rect, 0.0, theme::PANEL_DARK);
     let sig = app.project.transport.time_signature;
     let bar = sig.bar_beats();
-    let visible = (timeline.width() / app.arr.px_per_beat) as f64;
-    let step_bars = if app.arr.px_per_beat * bar as f32 > 40.0 { 1.0 } else if app.arr.px_per_beat * bar as f32 > 12.0 { 4.0 } else { 16.0 };
-    let first = (app.arr.scroll_beats / (bar * step_bars)).floor() as i64;
-    let last = ((app.arr.scroll_beats + visible) / (bar * step_bars)).ceil() as i64;
+    let visible = (timeline.width() / app.arr.view.px_per_beat) as f64;
+    let step_bars = if app.arr.view.px_per_beat * bar as f32 > 40.0 { 1.0 } else if app.arr.view.px_per_beat * bar as f32 > 12.0 { 4.0 } else { 16.0 };
+    let first = (app.arr.view.scroll_beats / (bar * step_bars)).floor() as i64;
+    let last = ((app.arr.view.scroll_beats + visible) / (bar * step_bars)).ceil() as i64;
     for k in first..=last {
         let b = k as f64 * bar * step_bars;
         let x = app.arr.x(timeline, b);
@@ -260,6 +337,13 @@ fn draw_ruler(app: &mut XdawApp, ui: &mut Ui, timeline: Rect) {
             app.arr.cursor = beat;
             app.rt.send(Command::Locate(beat));
         }
+    }
+    // Below the loop strip the ruler zooms (vertical drag) and scrolls (horizontal drag).
+    if !matches!(app.arr.drag, Some(Drag { kind: DragKind::Loop { .. }, .. })) {
+        timeline::ruler_zoom(&mut app.arr.view, ui, &resp, timeline);
+    }
+    if resp.hovered() && resp.hover_pos().is_some_and(|p| p.y >= loop_rect.bottom()) && !resp.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ZoomIn);
     }
     if resp.double_clicked() && resp.interact_pointer_pos().is_some_and(|p| p.y < loop_rect.bottom()) {
         app.project.transport.loop_enabled = !app.project.transport.loop_enabled;
@@ -320,8 +404,8 @@ fn track_lane(app: &mut XdawApp, ui: &mut Ui, t: usize, lane: Rect) {
     painter.rect_filled(lane, 0.0, if t % 2 == 0 { theme::BG } else { theme::dim(theme::BG, 1.08) });
     // Beat grid.
     let bar = app.project.transport.time_signature.bar_beats();
-    let visible = (lane.width() / app.arr.px_per_beat) as f64;
-    let first = (app.arr.scroll_beats / bar).floor() as i64;
+    let visible = (lane.width() / app.arr.view.px_per_beat) as f64;
+    let first = (app.arr.view.scroll_beats / bar).floor() as i64;
     for k in first..=first + (visible / bar).ceil() as i64 + 1 {
         let x = app.arr.x(lane, k as f64 * bar);
         painter.line_segment([pos2(x, lane.top()), pos2(x, lane.bottom())], Stroke::new(1.0, theme::dim(theme::GRID, 0.7)));
@@ -478,13 +562,23 @@ fn track_lane(app: &mut XdawApp, ui: &mut Ui, t: usize, lane: Rect) {
         }
     }
 
-    // Drops: browser files and Session clips.
-    if let Some(item) = resp.dnd_release_payload::<BrowserItem>() {
-        if let (BrowserItem::File(path), Some(b)) = ((*item).clone(), pointer_beat) {
-            drop_file(app, t, app.arr.snap(b, alt).max(0.0), &path);
+    // Drops: browser/Finder files, devices and Session clips.
+    if let Some(item) = resp.dnd_hover_payload::<BrowserItem>() {
+        painter.rect_stroke(lane.shrink(1.0), 0.0, Stroke::new(1.5, theme::ACCENT), StrokeKind::Inside);
+        if let (BrowserItem::File(_), Some(b)) = (&*item, pointer_beat) {
+            let x = app.arr.x(lane, app.arr.snap(b, alt).max(0.0));
+            painter.line_segment([pos2(x, lane.top()), pos2(x, lane.bottom())], Stroke::new(2.0, theme::ACCENT));
         }
     }
-    if let Some(drag) = resp.dnd_release_payload::<crate::session::SlotDrag>() {
+    if let Some(item) = crate::browser::dnd_release::<BrowserItem>(&resp) {
+        match ((*item).clone(), pointer_beat) {
+            (BrowserItem::File(path), Some(b)) => drop_files(app, t, app.arr.snap(b, alt).max(0.0), &path),
+            (BrowserItem::Device(k), _) => browser::add_device(app, r, k),
+            (BrowserItem::Preset(path), _) => browser::load_preset(app, r, &path),
+            _ => {}
+        }
+    }
+    if let Some(drag) = crate::browser::dnd_release::<crate::session::SlotDrag>(&resp) {
         if let Some(b) = pointer_beat {
             let at = app.arr.snap(b, alt).max(0.0);
             let saved = app.arr.cursor;
@@ -625,9 +719,11 @@ fn draw_clip(app: &XdawApp, p: &egui::Painter, c: &ArrangementClip, rect: Rect) 
     p.rect_filled(rect, 2.0, theme::dim(color, 0.55));
     let title = Rect::from_min_size(rect.min, vec2(rect.width(), 12.0));
     p.rect_filled(title, 2.0, color);
-    p.text(title.left_center() + vec2(3.0, 0.0), Align2::LEFT_CENTER, &c.clip.name, FontId::proportional(10.0), Color32::BLACK);
+    // Keep the name readable when the clip starts left of the view.
+    let name_x = title.left().max(p.clip_rect().left()).min(title.right() - 20.0).max(title.left());
+    p.with_clip_rect(title.intersect(p.clip_rect())).text(pos2(name_x + 3.0, title.center().y), Align2::LEFT_CENTER, &c.clip.name, FontId::proportional(10.0), Color32::BLACK);
     let body = Rect::from_min_max(pos2(rect.left(), rect.top() + 12.0), rect.max);
-    let ppb = app.arr.px_per_beat as f64;
+    let ppb = app.arr.view.px_per_beat as f64;
     match &c.clip.content {
         ClipContent::Audio(a) => {
             if let (Some(ov), Some(data)) = (app.media.overviews.get(&a.media.path), app.media.loaded.get(&a.media.path)) {
@@ -727,11 +823,47 @@ fn draw_automation(app: &XdawApp, p: &egui::Painter, t: usize, target: ParamTarg
     hit
 }
 
-fn drop_file(app: &mut XdawApp, t: usize, at: Beats, path: &std::path::Path) {
+/// Drops a file (plus any further files of the same Finder drop) one after another from `at`.
+fn drop_files(app: &mut XdawApp, t: usize, at: Beats, first: &std::path::Path) {
+    let mut paths = vec![first.to_path_buf()];
+    paths.extend(std::mem::take(&mut app.extra_drop));
+    let mut at = at;
+    for p in &paths {
+        if let Some(end) = drop_file(app, t, at, p) {
+            at = end;
+        }
+    }
+}
+
+/// Drop area under the last track: creates a track from the dropped item.
+fn drop_zone(app: &mut XdawApp, ui: &mut Ui, rect: Rect, timeline: Rect) {
+    let resp = ui.interact(rect, ui.id().with("arr_drop_zone"), Sense::hover());
+    let hovering = resp.dnd_hover_payload::<BrowserItem>().is_some();
+    let p = ui.painter_at(rect);
+    p.rect_stroke(rect.shrink(2.0), 3.0, Stroke::new(1.0, if hovering { theme::ACCENT } else { theme::GRID }), StrokeKind::Inside);
+    p.text(rect.center(), Align2::CENTER_CENTER, "Drop samples, MIDI files or devices here to create a track", FontId::proportional(11.0), if hovering { theme::ACCENT } else { theme::TEXT_DIM });
+    if let Some(item) = crate::browser::dnd_release::<BrowserItem>(&resp) {
+        let at = resp
+            .hover_pos()
+            .or(ui.input(|i| i.pointer.latest_pos()))
+            .filter(|p| p.x >= timeline.left())
+            .map(|p| app.arr.snap(app.arr.beat(timeline, p.x), false).max(0.0))
+            .unwrap_or(app.arr.cursor);
+        match (*item).clone() {
+            BrowserItem::File(path) => {
+                let t = crate::session::new_track_for_file(app, &path);
+                drop_files(app, t, at, &path);
+            }
+            other => crate::session::create_track_from(app, other),
+        }
+    }
+}
+
+/// Places one file on track `t` at `at`; returns the end of the new clip.
+fn drop_file(app: &mut XdawApp, t: usize, at: Beats, path: &std::path::Path) -> Option<Beats> {
     // Reuse slot import logic through a temporary clip.
-    let scene_count = app.project.scenes.len();
-    if scene_count == 0 {
-        return;
+    if app.project.scenes.is_empty() {
+        app.project.add_scene("1");
     }
     let before = app.project.tracks[t].slots[0].clip.clone();
     browser::drop_file_on_slot(app, t, 0, path);
@@ -743,7 +875,9 @@ fn drop_file(app: &mut XdawApp, t: usize, at: Beats, path: &std::path::Path) {
         app.project.tracks[t].arrangement.push(ArrangementClip { id, start: at, length, offset: 0.0, fade_in: 0.0, fade_out: 0.0, clip });
         app.sel.arr_clips = vec![(t, id)];
         app.label("Import to Arrangement");
+        return Some(at + length);
     }
+    None
 }
 
 pub fn copy_slot_to_arrangement(app: &mut XdawApp, t: usize, s: usize) {

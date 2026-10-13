@@ -88,6 +88,7 @@ pub struct XdawApp {
     pub status_line: String,
     pub arr: arrangement::ArrangementState,
     pub piano: clip_editor::PianoState,
+    pub wave: clip_editor::WaveState,
     pub browser: browser::BrowserState,
     pub kb: ComputerKeyboard,
     pub kb_enabled: bool,
@@ -108,6 +109,10 @@ pub struct XdawApp {
     last_frame: Instant,
     script: Option<crate::script::Script>,
     pub capture: HashMap<usize, crate::capture::History>,
+    /// Files dragged in from the OS file manager.
+    pub os_drop: crate::filedrop::OsDrop,
+    /// Further files of a multi-file drop, placed after the first by the drop target.
+    pub extra_drop: Vec<PathBuf>,
 }
 
 const AUTOSAVE_EVERY: Duration = Duration::from_secs(30);
@@ -132,6 +137,7 @@ impl XdawApp {
             status_line: String::new(),
             arr: arrangement::ArrangementState::default(),
             piano: clip_editor::PianoState::default(),
+            wave: Default::default(),
             browser: browser::BrowserState::new(),
             kb: ComputerKeyboard::default(),
             kb_enabled: true,
@@ -152,6 +158,8 @@ impl XdawApp {
             last_frame: Instant::now(),
             script: crate::script::Script::from_env(),
             capture: HashMap::new(),
+            os_drop: Default::default(),
+            extra_drop: vec![],
         };
         // Crash recovery for an unsaved session.
         if open.is_none() {
@@ -916,6 +924,23 @@ impl XdawApp {
                         self.delete_selection();
                         continue;
                     }
+                    Key::Plus | Key::Equals => {
+                        self.zoom_key(1.25);
+                        continue;
+                    }
+                    Key::Minus => {
+                        self.zoom_key(0.8);
+                        continue;
+                    }
+                    // Z/X are octave keys while the computer MIDI keyboard is on (as in Live).
+                    Key::Z if !self.kb_enabled && self.view == View::Arrangement => {
+                        if modifiers.shift {
+                            arrangement::zoom_to_song(self);
+                        } else {
+                            arrangement::zoom_to_selection(self);
+                        }
+                        continue;
+                    }
                     Key::Enter => {
                         if let Some(ClipLoc::Slot { track, slot }) = self.sel.clip {
                             self.rt.send(Command::LaunchSlot { track: track as u16, slot: slot as u16, down: true });
@@ -942,6 +967,18 @@ impl XdawApp {
             if self.kb_enabled && modifiers == Modifiers::NONE || (self.kb_enabled && modifiers.shift) {
                 self.computer_key(key, pressed);
             }
+        }
+    }
+
+    /// Keyboard zoom: the Arrangement in Arrangement View, else the clip editor.
+    fn zoom_key(&mut self, factor: f32) {
+        if self.view == View::Arrangement {
+            arrangement::zoom_step(self, factor);
+        } else {
+            let w = self.piano.width;
+            self.piano.view.zoom_at(factor, w * 0.5);
+            let w = self.wave.width;
+            self.wave.view.zoom_at(factor, w * 0.5);
         }
     }
 
@@ -1194,6 +1231,8 @@ impl eframe::App for XdawApp {
             View::Arrangement => arrangement::show(self, ui),
         });
         dialogs::show(self, &ctx);
+        // Drop targets consumed the extra files of a multi-file drop this frame.
+        self.extra_drop.clear();
 
         ctx.send_viewport_cmd(egui::ViewportCommand::Title(self.title()));
         ctx.request_repaint_after(Duration::from_millis(if self.playing() { 16 } else { 50 }));
@@ -1226,10 +1265,18 @@ impl eframe::App for XdawApp {
         let pointer_down = ctx.input(|i| i.pointer.any_down());
         self.commit_undo(pointer_down);
         self.autosave();
+        if crate::filedrop::hovering(self) {
+            ctx.request_repaint();
+        }
         ctx.request_repaint_after(Duration::from_millis(if self.playing() { 16 } else { 50 }));
     }
 
-    fn raw_input_hook(&mut self, _ctx: &egui::Context, raw: &mut egui::RawInput) {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw: &mut egui::RawInput) {
+        if let Some(frame) = self.script.as_mut().and_then(|s| s.os.pop_front()) {
+            self.os_drop.pos_override = Some(frame.pos);
+            frame.apply(raw);
+        }
+        crate::filedrop::hook(self, ctx, raw);
         if let Some(batch) = self.script.as_mut().and_then(|s| s.inject.pop_front()) {
             raw.events.extend(batch);
         }
