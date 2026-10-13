@@ -1221,10 +1221,17 @@ impl eframe::App for XdawApp {
                 ui.selectable_value(&mut self.detail, Detail::Devices, "Devices");
             });
             ui.separator();
-            match self.detail {
-                Detail::Clip => clip_editor::show(self, ui),
-                Detail::Devices => devices::show(self, ui),
-            }
+            // Content is laid out in a fixed rect so it can never push the panel
+            // taller than the size the user dragged it to.
+            let rect = ui.available_rect_before_wrap();
+            ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
+                ui.set_clip_rect(ui.clip_rect().intersect(rect));
+                match self.detail {
+                    Detail::Clip => clip_editor::show(self, ui),
+                    Detail::Devices => devices::show(self, ui),
+                }
+            });
+            ui.allocate_rect(rect, egui::Sense::hover());
         });
         egui::CentralPanel::default().show(ui, |ui| match self.view {
             View::Session => session::show(self, ui),

@@ -73,28 +73,32 @@ pub fn show(app: &mut XdawApp, ui: &mut Ui) {
             }
         });
         egui::CollapsingHeader::new("Presets").show(ui, |ui| {
-            for kind in DeviceKind::ALL {
-                for (i, p) in factory_presets(kind).iter().enumerate() {
-                    let name = format!("{} · {}", kind.name(), p.name);
-                    if matches(&name) {
-                        item(app, ui, &name, BrowserItem::Factory(kind, i));
-                    }
-                }
-            }
             let dir = presets_dir();
             for kind in DeviceKind::ALL {
-                let kdir = dir.join(format!("{kind:?}"));
-                let Ok(entries) = std::fs::read_dir(&kdir) else { continue };
-                let mut files: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect();
+                let mut files: Vec<PathBuf> = std::fs::read_dir(dir.join(format!("{kind:?}")))
+                    .map(|e| e.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect())
+                    .unwrap_or_default();
                 files.sort();
-                for f in files {
-                    let name = format!("{} · {}", kind.name(), f.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default());
-                    if matches(&name) {
-                        item(app, ui, &name, BrowserItem::Preset(f));
-                    }
+                let factory = factory_presets(kind);
+                if factory.is_empty() && files.is_empty() {
+                    continue;
                 }
+                egui::CollapsingHeader::new(kind.name()).id_salt(("presets", kind)).show(ui, |ui| {
+                    for (i, p) in factory.iter().enumerate().filter(|(_, p)| matches(p.name)) {
+                        item(app, ui, p.name, BrowserItem::Factory(kind, i));
+                    }
+                    for f in files {
+                        let name = f.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+                        if matches(&name) {
+                            item(app, ui, &name, BrowserItem::Preset(f));
+                        }
+                    }
+                });
             }
         });
+        if let Some(samples) = app.project_dir().map(|d| d.join("Samples")).filter(|d| d.is_dir()) {
+            egui::CollapsingHeader::new("Samples").default_open(true).show(ui, |ui| folder(app, ui, &samples, &filter, 0));
+        }
         let mut places: Vec<(String, PathBuf)> = vec![];
         if let Some(d) = app.project_dir() {
             places.push(("Current Project".into(), d));

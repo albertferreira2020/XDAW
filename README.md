@@ -1,5 +1,7 @@
 # XDAW
 
+![XDAW Arrangement view](docs/images/xdaw-arrangement.png)
+
 XDAW is an independent desktop DAW written in Rust. Its workflows are modeled on the public
 documentation of Ableton Live 10 (Session/Arrangement clip launching, recording, mixing and
 export), with its own name, look, instruments, presets and demo content. It contains no
