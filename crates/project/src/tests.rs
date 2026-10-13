@@ -133,6 +133,7 @@ fn missing_media_reported_and_collect_copies_into_project() {
         warp: WarpMode::RePitch,
         source_bpm: 120.0,
         markers: vec![],
+        envelopes: vec![],
     });
     p.tracks[1].slots[0].clip = Some(missing_clip);
     let missing = io::missing_media(&p, Some(&dir));

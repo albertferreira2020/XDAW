@@ -149,7 +149,7 @@ fn launch_transition_has_no_click() {
             id,
             name: key.into(),
             color: [0; 3],
-            content: ClipContent::Audio(AudioContent { media: MediaRef { path: key.into() }, warp: WarpMode::RePitch, source_bpm: 120.0, markers: vec![] }),
+            content: ClipContent::Audio(AudioContent { media: MediaRef { path: key.into() }, warp: WarpMode::RePitch, source_bpm: 120.0, markers: vec![], envelopes: vec![] }),
             region: ClipRegion::looped(8.0),
             launch_mode: Default::default(),
             quantize: Default::default(),
@@ -224,7 +224,7 @@ fn stretch_clip_uses_pitch_preserving_rendering_when_available() {
         name: "tone".into(),
         color: [0; 3],
         // Recorded at 120 BPM: 2 s = 4 beats. At 100 BPM, 4 beats last 2.4 s.
-        content: ClipContent::Audio(AudioContent { media: MediaRef { path: "tone".into() }, warp: WarpMode::Stretch, source_bpm: 120.0, markers: vec![] }),
+        content: ClipContent::Audio(AudioContent { media: MediaRef { path: "tone".into() }, warp: WarpMode::Stretch, source_bpm: 120.0, markers: vec![], envelopes: vec![] }),
         region: ClipRegion::looped(4.0),
         launch_mode: Default::default(),
         quantize: Default::default(),
@@ -274,6 +274,7 @@ fn warp_markers_remap_source_time_in_repitch_and_stretch() {
             source_bpm: 120.0,
             // Beat 4 pinned to 1.0 s of source (twice the source tempo in the first bar).
             markers: vec![WarpMarker { beat: 0.0, source_seconds: 0.0 }, WarpMarker { beat: 4.0, source_seconds: 1.0 }],
+            envelopes: vec![],
         }),
         region: ClipRegion::looped(8.0),
         launch_mode: Default::default(),

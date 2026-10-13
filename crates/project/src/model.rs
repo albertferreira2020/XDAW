@@ -1,5 +1,6 @@
 //! Project data model. Owned by the UI thread; the engine receives compiled snapshots.
 
+use crate::arrange::*;
 use xdaw_dsp::DeviceKind;
 use xdaw_sequencer::{Beats, ClipQuantize, ClipRegion, LaunchMode, Quantize, TimeSignature};
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,9 @@ pub struct Project {
     pub midi_mappings: Vec<ControlMapping>,
     #[serde(default)]
     pub key_mappings: Vec<ControlMapping>,
+    /// Named markers on the Arrangement timeline, sorted by beat.
+    #[serde(default)]
+    pub locators: Vec<Locator>,
     pub next_id: Id,
 }
 
@@ -37,6 +41,11 @@ pub struct TransportSettings {
     pub loop_enabled: bool,
     pub loop_start: Beats,
     pub loop_length: Beats,
+    /// Arrangement recording starts at the loop start / ends at the loop end.
+    #[serde(default)]
+    pub punch_in: bool,
+    #[serde(default)]
+    pub punch_out: bool,
 }
 
 impl Default for TransportSettings {
@@ -50,6 +59,8 @@ impl Default for TransportSettings {
             loop_enabled: false,
             loop_start: 0.0,
             loop_length: 16.0,
+            punch_in: false,
+            punch_out: false,
         }
     }
 }
@@ -112,6 +123,17 @@ pub struct Track {
     /// Macro controls (rack-style), each driving device parameters.
     #[serde(default)]
     pub macros: Vec<Macro>,
+    /// Recorded takes (comping lanes); `arrangement` is the active comp.
+    #[serde(default)]
+    pub take_lanes: Vec<TakeLane>,
+    #[serde(default)]
+    pub show_takes: bool,
+    /// Collapsed in the Arrangement (a folded group also hides its members).
+    #[serde(default)]
+    pub folded: bool,
+    /// Rendered device output that replaces the track's sources and devices.
+    #[serde(default)]
+    pub frozen: Option<Frozen>,
 }
 
 pub const MACROS: usize = 8;
@@ -277,6 +299,9 @@ pub struct AudioContent {
     pub source_bpm: f64,
     #[serde(default)]
     pub markers: Vec<WarpMarker>,
+    /// Clip envelopes (gain in dB, pan -1..1) over clip-local beats.
+    #[serde(default)]
+    pub envelopes: Vec<ClipEnvelope>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -366,31 +391,11 @@ pub struct AutomationLane {
 impl AutomationLane {
     /// Linear interpolation; holds first/last value outside the points.
     pub fn value_at(&self, beat: Beats) -> Option<f32> {
-        let pts = &self.points;
-        let first = pts.first()?;
-        if beat <= first.beat {
-            return Some(first.value);
-        }
-        let idx = pts.partition_point(|p| p.beat <= beat);
-        if idx >= pts.len() {
-            return pts.last().map(|p| p.value);
-        }
-        let (a, b) = (pts[idx - 1], pts[idx]);
-        let span = b.beat - a.beat;
-        if span <= 0.0 {
-            return Some(b.value);
-        }
-        let t = ((beat - a.beat) / span) as f32;
-        Some(a.value + (b.value - a.value) * t)
+        interpolate(&self.points, beat)
     }
 
     pub fn insert(&mut self, point: AutomationPoint) {
-        let idx = self.points.partition_point(|p| p.beat < point.beat);
-        if self.points.get(idx).is_some_and(|p| (p.beat - point.beat).abs() < 1e-9) {
-            self.points[idx] = point;
-        } else {
-            self.points.insert(idx, point);
-        }
+        insert_point(&mut self.points, point);
     }
 }
 
@@ -442,6 +447,7 @@ impl Project {
             scenes: vec![],
             midi_mappings: vec![],
             key_mappings: vec![],
+            locators: vec![],
             next_id: 1,
         };
         p.master.id = p.alloc_id();
@@ -661,6 +667,10 @@ impl Track {
             automation: vec![],
             group: None,
             macros: vec![],
+            take_lanes: vec![],
+            show_takes: false,
+            folded: false,
+            frozen: None,
         }
     }
 

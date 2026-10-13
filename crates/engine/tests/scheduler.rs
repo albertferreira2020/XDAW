@@ -23,7 +23,7 @@ fn audio_clip(p: &mut Project, key: &str, beats: f64, bpm: f64) -> Clip {
         id: p.alloc_id(),
         name: key.into(),
         color: [0, 0, 0],
-        content: ClipContent::Audio(AudioContent { media: MediaRef { path: key.into() }, warp: WarpMode::RePitch, source_bpm: bpm, markers: vec![] }),
+        content: ClipContent::Audio(AudioContent { media: MediaRef { path: key.into() }, warp: WarpMode::RePitch, source_bpm: bpm, markers: vec![], envelopes: vec![] }),
         region: ClipRegion::looped(beats),
         launch_mode: Default::default(),
         quantize: ClipQuantize::Global,

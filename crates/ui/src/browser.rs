@@ -298,7 +298,7 @@ pub fn drop_file_on_slot(app: &mut XdawApp, track: usize, slot: usize, path: &Pa
         let beats = (seconds * bpm / 60.0).max(0.25);
         let media = media_ref_for(app, path);
         app.media.request(&media.path, io::resolve_media(&media, app.project_dir().as_deref()));
-        make_clip(app, path, ClipContent::Audio(AudioContent { media, warp: WarpMode::RePitch, source_bpm: bpm, markers: vec![] }), beats, track)
+        make_clip(app, path, ClipContent::Audio(AudioContent { media, warp: WarpMode::RePitch, source_bpm: bpm, markers: vec![], envelopes: vec![] }), beats, track)
     } else {
         return;
     };

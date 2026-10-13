@@ -285,7 +285,7 @@ fn clip(p: &mut Project, name: &str, color: [u8; 3], content: ClipContent, beats
 }
 
 fn audio(path: &str) -> ClipContent {
-    ClipContent::Audio(AudioContent { media: MediaRef { path: path.into() }, warp: WarpMode::RePitch, source_bpm: BPM, markers: vec![] })
+    ClipContent::Audio(AudioContent { media: MediaRef { path: path.into() }, warp: WarpMode::RePitch, source_bpm: BPM, markers: vec![], envelopes: vec![] })
 }
 
 fn notes(v: &[(f64, f64, u8, u8)]) -> ClipContent {
