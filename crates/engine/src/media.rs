@@ -211,3 +211,15 @@ impl MediaCache {
         self.loaded.insert(key, data);
     }
 }
+
+/// Duration in seconds; reads only the header for WAV, decodes other formats.
+pub fn probe_duration(path: &Path) -> Result<f64, MediaError> {
+    if !path.is_file() {
+        return Err(MediaError::Missing(path.to_path_buf()));
+    }
+    if let Ok(r) = hound::WavReader::open(path) {
+        let spec = r.spec();
+        return Ok(r.duration() as f64 / spec.sample_rate as f64);
+    }
+    decode_file(path).map(|d| d.duration_seconds())
+}

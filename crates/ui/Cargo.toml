@@ -5,4 +5,20 @@ edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[[bin]]
+name = "xdaw"
+path = "src/main.rs"
+
 [dependencies]
+xdaw-dsp.workspace = true
+xdaw-sequencer.workspace = true
+xdaw-project.workspace = true
+xdaw-engine.workspace = true
+xdaw-midi.workspace = true
+eframe.workspace = true
+egui.workspace = true
+rfd.workspace = true
+crossbeam-channel.workspace = true
+rtrb.workspace = true
+serde.workspace = true
+serde_json.workspace = true

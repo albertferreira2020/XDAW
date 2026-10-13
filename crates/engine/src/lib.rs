@@ -16,3 +16,4 @@ pub use handle::{create, EngineHandle};
 pub mod audio_io;
 pub mod recorder;
 pub mod demo;
+pub mod sync;
