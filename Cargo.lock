@@ -5,6 +5,9 @@ version = 4
 [[package]]
 name = "ost-dsp"
 version = "0.1.0"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "ost-engine"

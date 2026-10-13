@@ -1,14 +1,17 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+//! Realtime-safe DSP building blocks, instruments and effects.
+//!
+//! Every `process`/`render` method is allocation-free and lock-free; buffers
+//! are created in constructors, which must run off the audio thread.
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+pub mod device;
+pub mod effects;
+pub mod env;
+pub mod filter;
+pub mod instruments;
+pub mod meter;
+pub mod params;
+pub mod util;
 
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use device::{Device, DeviceKind, DeviceMedia};
+pub use instruments::SampleData;
+pub use params::{Ctx, NoteEvent, NoteKind, ParamDesc, ParamKind};
