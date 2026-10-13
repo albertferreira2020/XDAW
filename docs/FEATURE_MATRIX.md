@@ -80,7 +80,7 @@ Platform: macOS 26.6.2, Apple M5, built-in output at 48 kHz. Windows/Linux: **no
 | --- | --- | --- | --- |
 | Volume, pan (constant power), mute (activator), solo (in place), arm, meters, clip indicator | L10 §15 | Verified (vol/pan/mute/solo/sends); meters visual only | `sends_reach_returns_and_mute_solo_gate`, `solo_silences_other_tracks_but_not_returns`, pan law test |
 | Sends (post-fader) and return tracks | L10 §15 | Verified | same |
-| Group tracks | L10 §15.3 | Not implemented | |
+| Group tracks (one level; group bus with devices/mixer/sends; group slots launch members; solo through group) | L10 §15.3 | Verified (engine); UI unverified | `group_tracks_sum_members_through_their_mixer`; nesting and folding are not implemented |
 | Feedback-free routing | prompt | Verified by construction | returns cannot send; `Project::validate` |
 | Latency compensation | prompt | Not needed yet | all built-in devices are zero-latency |
 | Poly synth (2 PolyBLEP osc, SVF, 2 ADSR, 16 voices) | Own | Verified | voice stealing, sustain, release tests |

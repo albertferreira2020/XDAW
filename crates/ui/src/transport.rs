@@ -88,6 +88,18 @@ fn menus(app: &mut XdawApp, ui: &mut Ui) {
             app.project.add_device(xdaw_project::TrackRef::Track(t), xdaw_dsp::DeviceKind::PolySynth);
             app.label("Insert MIDI Track");
         }
+        if ui.button("Insert Group Track").clicked() {
+            let n = app.project.tracks.len() + 1;
+            let g = app.project.add_track(xdaw_project::TrackKind::Group, &format!("{n} Group"));
+            // Group the selected track, if any.
+            if let Some(xdaw_project::TrackRef::Track(t)) = app.sel.track {
+                if app.project.tracks[t].kind != xdaw_project::TrackKind::Group {
+                    let gid = app.project.tracks[g].id;
+                    app.project.tracks[t].group = Some(gid);
+                }
+            }
+            app.label("Insert Group Track");
+        }
         if ui.add_enabled(app.project.returns.len() < xdaw_engine::protocol::MAX_RETURNS, egui::Button::new("Insert Return Track")).clicked() {
             let n = app.project.returns.len();
             app.project.add_return(&format!("{} Return", (b'A' + n as u8) as char));

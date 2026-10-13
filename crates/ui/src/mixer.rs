@@ -115,7 +115,7 @@ pub fn strip(app: &mut XdawApp, ui: &mut Ui, r: TrackRef, width: f32) {
         ui.set_width(width);
         let t = app.project.track(r).clone();
         // Sends.
-        if matches!(t.kind, TrackKind::Audio | TrackKind::Midi) {
+        if matches!(t.kind, TrackKind::Audio | TrackKind::Midi | TrackKind::Group) {
             ui.horizontal_wrapped(|ui| {
                 for i in 0..returns {
                     let mut n = db_to_fader(t.mixer.sends_db[i]);

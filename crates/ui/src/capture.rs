@@ -54,10 +54,6 @@ impl History {
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.notes.is_empty()
-    }
-
     /// Returns clip notes (clip-relative beats) and the clip length.
     pub fn capture(&self, bpm: f64, sample_rate: f64, bar_beats: f64) -> Option<(Vec<Note>, f64)> {
         let last = self.notes.back()?;

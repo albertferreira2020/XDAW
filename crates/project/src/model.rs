@@ -60,6 +60,8 @@ pub enum TrackKind {
     Midi,
     Return,
     Master,
+    /// Sums its member tracks (`Track::group`) through its own devices and mixer.
+    Group,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -104,6 +106,9 @@ pub struct Track {
     pub slots: Vec<Slot>,
     pub arrangement: Vec<ArrangementClip>,
     pub automation: Vec<AutomationLane>,
+    /// Group track this track feeds (one level of grouping).
+    #[serde(default)]
+    pub group: Option<Id>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -518,7 +523,15 @@ impl Project {
             issues.push(format!("unexpected format '{}'", self.format));
         }
         for t in &self.tracks {
-            if !matches!(t.kind, TrackKind::Audio | TrackKind::Midi) {
+            if t.kind == TrackKind::Group && (t.group.is_some() || t.slots.iter().any(|s| s.clip.is_some()) || !t.arrangement.is_empty()) {
+                issues.push(format!("group track '{}' cannot hold clips or be nested", t.name));
+            }
+            if let Some(g) = t.group {
+                if !self.tracks.iter().any(|x| x.id == g && x.kind == TrackKind::Group) {
+                    issues.push(format!("track '{}' belongs to a missing group", t.name));
+                }
+            }
+            if !matches!(t.kind, TrackKind::Audio | TrackKind::Midi | TrackKind::Group) {
                 issues.push(format!("track '{}' has kind {:?} in the track list", t.name, t.kind));
             }
             if t.slots.len() != self.scenes.len() {
@@ -557,7 +570,7 @@ impl Project {
 impl Track {
     pub fn new(id: Id, name: &str, kind: TrackKind, color: [u8; 3], scenes: usize, returns: usize) -> Self {
         let mut mixer = Mixer::default();
-        if matches!(kind, TrackKind::Audio | TrackKind::Midi) {
+        if matches!(kind, TrackKind::Audio | TrackKind::Midi | TrackKind::Group) {
             mixer.sends_db = vec![SEND_OFF_DB; returns];
         }
         if kind == TrackKind::Audio {
@@ -570,9 +583,10 @@ impl Track {
             color,
             mixer,
             devices: vec![],
-            slots: if matches!(kind, TrackKind::Audio | TrackKind::Midi) { vec![Slot::default(); scenes] } else { vec![] },
+            slots: if matches!(kind, TrackKind::Audio | TrackKind::Midi | TrackKind::Group) { vec![Slot::default(); scenes] } else { vec![] },
             arrangement: vec![],
             automation: vec![],
+            group: None,
         }
     }
 

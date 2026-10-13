@@ -103,9 +103,15 @@ pub fn track_header(app: &mut XdawApp, ui: &mut Ui, r: TrackRef) {
     let t = app.project.track(r);
     let selected = app.sel.track == Some(r);
     let color = theme::rgb(t.color);
+    let group_color = t.group.and_then(|g| app.project.tracks.iter().find(|x| x.id == g)).map(|g| theme::rgb(g.color));
+    let is_group = t.kind == TrackKind::Group;
     let p = ui.painter();
     p.rect_filled(rect.shrink(1.0), 2.0, if selected { color } else { theme::dim(color, 0.55) });
-    p.text(rect.left_center() + vec2(5.0, 0.0), Align2::LEFT_CENTER, &t.name, FontId::proportional(11.5), if selected { Color32::BLACK } else { theme::TEXT });
+    if let Some(gc) = group_color {
+        p.rect_filled(Rect::from_min_size(rect.min + vec2(1.0, 1.0), vec2(4.0, rect.height() - 2.0)), 0.0, gc);
+    }
+    let label = if is_group { format!("[{}]", t.name) } else { t.name.clone() };
+    p.text(rect.left_center() + vec2(7.0, 0.0), Align2::LEFT_CENTER, label, FontId::proportional(11.5), if selected { Color32::BLACK } else { theme::TEXT });
     if resp.clicked() {
         app.select_track(r);
         app.detail = Detail::Devices;
@@ -150,9 +156,33 @@ pub fn track_header(app: &mut XdawApp, ui: &mut Ui, r: TrackRef) {
                 app.label("Duplicate Track");
                 ui.close();
             }
+            if app.project.tracks[i].kind != TrackKind::Group {
+                let groups: Vec<(Id, String)> = app.project.tracks.iter().filter(|g| g.kind == TrackKind::Group).map(|g| (g.id, g.name.clone())).collect();
+                if !groups.is_empty() || app.project.tracks[i].group.is_some() {
+                    ui.menu_button("Group", |ui| {
+                        for (gid, name) in groups {
+                            if ui.button(format!("Add to {name}")).clicked() {
+                                app.project.tracks[i].group = Some(gid);
+                                app.label("Group Track");
+                                ui.close();
+                            }
+                        }
+                        if app.project.tracks[i].group.is_some() && ui.button("Remove from group").clicked() {
+                            app.project.tracks[i].group = None;
+                            app.label("Ungroup Track");
+                            ui.close();
+                        }
+                    });
+                }
+            }
             if ui.button("Delete Track").clicked() {
                 app.rt.send(Command::StopTrack { track: i as u16 });
-                app.project.tracks.remove(i);
+                let removed = app.project.tracks.remove(i);
+                if removed.kind == TrackKind::Group {
+                    for t in app.project.tracks.iter_mut().filter(|t| t.group == Some(removed.id)) {
+                        t.group = None;
+                    }
+                }
                 app.sel = Default::default();
                 app.label("Delete Track");
                 ui.close();
@@ -194,7 +224,45 @@ pub fn color_menu(ui: &mut Ui, color: &mut [u8; 3]) {
     });
 }
 
+fn members(app: &XdawApp, g: usize) -> Vec<usize> {
+    let gid = app.project.tracks[g].id;
+    (0..app.project.tracks.len()).filter(|&i| app.project.tracks[i].group == Some(gid)).collect()
+}
+
+/// Group slot: launches every member clip in the scene (stop buttons stop the others).
+fn group_slot(app: &mut XdawApp, ui: &mut Ui, g: usize, s: usize) {
+    let (rect, resp) = ui.allocate_exact_size(vec2(COL_W, SLOT_H), Sense::click());
+    let m = members(app, g);
+    let with_clip: Vec<usize> = m.iter().copied().filter(|&t| app.project.tracks[t].slots[s].clip.is_some()).collect();
+    let playing = with_clip.iter().any(|&t| app.track_status(t).playing_slot.load(Ordering::Relaxed) == s as i32);
+    let inner = rect.shrink2(vec2(2.0, 1.5));
+    let p = ui.painter();
+    let color = theme::rgb(app.project.tracks[g].color);
+    p.rect_filled(inner, 2.0, if with_clip.is_empty() { theme::SLOT } else { theme::dim(color, if playing { 0.9 } else { 0.4 }) });
+    let c0 = pos2(inner.left() + 9.0, inner.center().y);
+    if with_clip.is_empty() {
+        p.rect_filled(Rect::from_center_size(c0, vec2(7.0, 7.0)), 1.0, theme::GRID);
+    } else {
+        p.add(egui::Shape::convex_polygon(vec![c0 + vec2(-4.0, -5.0), c0 + vec2(5.0, 0.0), c0 + vec2(-4.0, 5.0)], if playing { theme::PLAYING } else { theme::TEXT }, Stroke::NONE));
+    }
+    if resp.clicked() {
+        for t in m {
+            if app.project.tracks[t].slots[s].clip.is_some() {
+                app.rt.send(Command::LaunchSlot { track: t as u16, slot: s as u16, down: true });
+                app.rt.send(Command::LaunchSlot { track: t as u16, slot: s as u16, down: false });
+            } else if app.project.tracks[t].slots[s].has_stop_button && !with_clip.is_empty() {
+                app.rt.send(Command::StopTrack { track: t as u16 });
+            } else if with_clip.is_empty() {
+                app.rt.send(Command::StopTrack { track: t as u16 });
+            }
+        }
+    }
+}
+
 fn slot(app: &mut XdawApp, ui: &mut Ui, t: usize, s: usize) {
+    if app.project.tracks[t].kind == TrackKind::Group {
+        return group_slot(app, ui, t, s);
+    }
     let (rect, resp) = ui.allocate_exact_size(vec2(COL_W, SLOT_H), Sense::click_and_drag());
     let st = app.track_status(t);
     let playing = st.playing_slot.load(Ordering::Relaxed) == s as i32;
@@ -588,6 +656,10 @@ fn track_status(app: &mut XdawApp, ui: &mut Ui, t: usize) {
     if resp.clicked() {
         if app.map_mode != MapMode::Off {
             app.map_target = Some(MappingTarget::StopTrack { track: app.project.tracks[t].id });
+        } else if app.project.tracks[t].kind == TrackKind::Group {
+            for m in members(app, t) {
+                app.rt.send(Command::StopTrack { track: m as u16 });
+            }
         } else {
             app.rt.send(Command::StopTrack { track: t as u16 });
         }

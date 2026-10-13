@@ -713,8 +713,29 @@ impl Renderer {
         mr.fill(0.0);
 
         let mut sink = EventSink { ring: &mut self.rings.events, status: &self.status };
+        for (g_l, g_r) in self.graph.group_l.iter_mut().zip(self.graph.group_r.iter_mut()) {
+            g_l[..n].fill(0.0);
+            g_r[..n].fill(0.0);
+        }
+        // Pass 0: clip tracks (feed group buses or master). Pass 1: group tracks.
+        for pass in 0..2 {
         for ti in 0..self.graph.tracks.len() {
+            let is_group = self.graph.tracks[ti].kind == TrackKind::Group;
+            if (pass == 1) != is_group {
+                continue;
+            }
+            let tracks = &self.graph.tracks;
+            let parent_solo = tracks[ti].output_group.is_some_and(|g| tracks[g].mixer.solo);
+            let member_solo = is_group && tracks.iter().any(|c| c.output_group == Some(ti) && c.mixer.solo);
             let t = &mut self.graph.tracks[ti];
+            if is_group {
+                t.events.clear();
+                if span.playing {
+                    apply_automation(t, b0);
+                }
+                t.l[..n].copy_from_slice(&self.graph.group_l[ti][..n]);
+                t.r[..n].copy_from_slice(&self.graph.group_r[ti][..n]);
+            } else {
             let receives_live = t.kind == TrackKind::Midi && (t.mixer.arm || t.mixer.monitor == Monitor::In);
             for &(target, kind) in &live[..live_len] {
                 let to_us = match target {
@@ -766,8 +787,9 @@ impl Renderer {
                     }
                 }
             }
+            }
             let (gr, gr_r) = (&mut self.graph.return_l, &mut self.graph.return_r);
-            process_track(t, n, &ctx, any_solo);
+            process_track(t, n, &ctx, any_solo, parent_solo || member_solo);
             for (k, (rl, rr)) in gr.iter_mut().zip(gr_r.iter_mut()).enumerate() {
                 let send = &mut t.rt.sends[k];
                 if send.target() <= 0.0 && !send.is_ramping() {
@@ -779,11 +801,22 @@ impl Renderer {
                     rr[i] += t.r[i] * g;
                 }
             }
-            for i in 0..n {
-                ml[i] += t.l[i];
-                mr[i] += t.r[i];
+            match t.output_group {
+                Some(g) if g != ti => {
+                    for i in 0..n {
+                        self.graph.group_l[g][i] += t.l[i];
+                        self.graph.group_r[g][i] += t.r[i];
+                    }
+                }
+                _ => {
+                    for i in 0..n {
+                        ml[i] += t.l[i];
+                        mr[i] += t.r[i];
+                    }
+                }
             }
             publish_meter(&self.status, TrackIx::Track(ti as u16), &t.l[..n], &t.r[..n]);
+        }
         }
         for ri in 0..self.graph.returns.len() {
             let t = &mut self.graph.returns[ri];
@@ -793,7 +826,7 @@ impl Renderer {
             }
             t.l[..n].copy_from_slice(&self.graph.return_l[ri][..n]);
             t.r[..n].copy_from_slice(&self.graph.return_r[ri][..n]);
-            process_track(t, n, &ctx, any_solo);
+            process_track(t, n, &ctx, any_solo, false);
             for i in 0..n {
                 ml[i] += t.l[i];
                 mr[i] += t.r[i];
@@ -807,7 +840,7 @@ impl Renderer {
         }
         m.l[..n].copy_from_slice(ml);
         m.r[..n].copy_from_slice(mr);
-        process_track(m, n, &ctx, false);
+        process_track(m, n, &ctx, false, false);
         let bad = xdaw_dsp::util::sanitize(&mut m.l[..n]) | xdaw_dsp::util::sanitize(&mut m.r[..n]);
         if bad {
             self.status.nonfinite_blocks.fetch_add(1, Ordering::Relaxed);
@@ -1290,9 +1323,9 @@ fn render_tail(t: &mut RtTrack, span: &Span, a: usize, b: usize) {
 }
 
 /// Device chain plus fader, pan and mute/solo for one track.
-fn process_track(t: &mut RtTrack, n: usize, ctx: &Ctx, any_solo: bool) {
+fn process_track(t: &mut RtTrack, n: usize, ctx: &Ctx, any_solo: bool, solo_through_group: bool) {
     t.events.sort_unstable_by_key(|e| (e.offset, matches!(e.kind, NoteKind::On { .. })));
-    let audible = t.is_audible_with(any_solo);
+    let audible = t.is_audible_with(any_solo) || (!t.mixer.mute && solo_through_group);
     let (l, r) = (&mut t.l[..n], &mut t.r[..n]);
     for d in t.devices.iter_mut() {
         if d.bypass {

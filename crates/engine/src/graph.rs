@@ -193,6 +193,8 @@ pub struct RtMixer {
 pub struct RtTrack {
     pub id: Id,
     pub kind: TrackKind,
+    /// Index (in `Graph::tracks`) of the group track this track feeds.
+    pub output_group: Option<usize>,
     pub devices: Vec<RtDevice>,
     pub slots: Vec<Option<RtClip>>,
     pub slot_has_stop: Vec<bool>,
@@ -207,6 +209,7 @@ pub struct RtTrack {
 
 impl RtTrack {
     pub fn is_audible_with(&self, any_solo: bool) -> bool {
+        // Group tracks pass audio of soloed members; see `render_span`.
         !self.mixer.mute && (!any_solo || self.mixer.solo || matches!(self.kind, TrackKind::Return | TrackKind::Master))
     }
 }
@@ -220,6 +223,9 @@ pub struct Graph {
     pub global_quantize: Quantize,
     pub return_l: Vec<Vec<f32>>,
     pub return_r: Vec<Vec<f32>>,
+    /// Group buses, indexed like `tracks` (only group tracks use theirs).
+    pub group_l: Vec<Vec<f32>>,
+    pub group_r: Vec<Vec<f32>>,
 }
 
 impl Graph {
@@ -339,6 +345,7 @@ fn compile_track(t: &model::Track, media: &dyn MediaSource, sr: f64, bpm: f64) -
     RtTrack {
         id: t.id,
         kind: t.kind,
+        output_group: None,
         devices,
         slots: t.slots.iter().map(|s| s.clip.as_ref().map(|c| compile_clip(c, media, bpm))).collect(),
         slot_has_stop: t.slots.iter().map(|s| s.has_stop_button).collect(),
@@ -382,15 +389,22 @@ pub fn build_graph(project: &Project, media: &dyn MediaSource, sample_rate: f64)
         return Err(GraphError::Invalid(issue));
     }
     let bpm = project.transport.bpm;
+    let mut tracks: Vec<RtTrack> = project.tracks.iter().map(|t| compile_track(t, media, sample_rate, bpm)).collect();
+    for (i, t) in project.tracks.iter().enumerate() {
+        tracks[i].output_group = t.group.and_then(|g| project.tracks.iter().position(|x| x.id == g && x.kind == TrackKind::Group));
+    }
+    let groups = project.tracks.len();
     Ok(Graph {
         sample_rate,
-        tracks: project.tracks.iter().map(|t| compile_track(t, media, sample_rate, bpm)).collect(),
+        tracks,
         returns: project.returns.iter().map(|t| compile_track(t, media, sample_rate, bpm)).collect(),
         master: compile_track(&project.master, media, sample_rate, bpm),
         time_signature: project.transport.time_signature,
         global_quantize: project.transport.global_quantize,
         return_l: vec![vec![0.0; MAX_BLOCK]; project.returns.len()],
         return_r: vec![vec![0.0; MAX_BLOCK]; project.returns.len()],
+        group_l: vec![vec![0.0; MAX_BLOCK]; groups],
+        group_r: vec![vec![0.0; MAX_BLOCK]; groups],
     })
 }
 

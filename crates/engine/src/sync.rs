@@ -22,6 +22,7 @@ struct TrackKey {
     kind: xdaw_project::TrackKind,
     devices: Vec<DeviceKey>,
     stops: Vec<bool>,
+    group: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -48,6 +49,7 @@ fn track_key(t: &Track) -> TrackKey {
             })
             .collect(),
         stops: t.slots.iter().map(|s| s.has_stop_button).collect(),
+        group: t.group,
     }
 }
 

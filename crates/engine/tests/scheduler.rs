@@ -500,3 +500,29 @@ fn follow_actions_chain_clips_at_exact_times_and_stop() {
     assert!(l[23_000].abs() > 0.1);
     assert!(l[24_000 + 100..].iter().all(|x| x.abs() < 1e-6), "stopped after one beat");
 }
+
+#[test]
+fn group_tracks_sum_members_through_their_mixer() {
+    let sr = 48_000.0;
+    let (mut p, media) = one_audio_track(sr, 120.0);
+    p.add_track(TrackKind::Audio, "B");
+    let c = audio_clip(&mut p, "dc", 4.0, 120.0);
+    p.tracks[1].slots[0].clip = Some(c);
+    let g = p.add_track(TrackKind::Group, "Group");
+    let gid = p.tracks[g].id;
+    p.tracks[0].group = Some(gid);
+    p.tracks[1].group = Some(gid);
+    p.tracks[g].mixer.volume_db = -6.0206;
+    assert!(p.validate().is_empty(), "{:?}", p.validate());
+    let mut rig = Rig::new(&p, &media, sr);
+    rig.handle.send(Command::LaunchScene { slot: 0 });
+    let (l, _) = rig.render(5_000, 256);
+    assert!((l[4_000] - 0.5).abs() < 1e-3, "(0.5 + 0.5) * group -6 dB: {}", l[4_000]);
+    // Soloing a member keeps its group audible; the other member is silenced.
+    rig.handle.send(Command::SetMixer { track: TrackIx::Track(0), param: MixParam::Solo, value: 1.0 });
+    let (l, _) = rig.render(5_000, 256);
+    assert!((l[4_000] - 0.25).abs() < 1e-3, "solo member through group: {}", l[4_000]);
+    rig.handle.send(Command::SetMixer { track: TrackIx::Track(g as u16), param: MixParam::Mute, value: 1.0 });
+    let (l, _) = rig.render(5_000, 256);
+    assert!(l[4_000].abs() < 1e-4, "muted group silences members");
+}
