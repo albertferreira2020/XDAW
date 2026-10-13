@@ -1332,8 +1332,10 @@ fn play_clip(
                     // Edge declick plus user fades.
                     let from_start = (beat - c.start) * spb;
                     let to_end = (c.end() - beat) * spb;
-                    g *= (from_start / TAIL_SAMPLES as f64).min(1.0) as f32;
-                    g *= (to_end / TAIL_SAMPLES as f64).min(1.0) as f32;
+                    if c.edges {
+                        g *= (from_start / TAIL_SAMPLES as f64).min(1.0) as f32;
+                        g *= (to_end / TAIL_SAMPLES as f64).min(1.0) as f32;
+                    }
                     if c.fade_in > 0.0 {
                         g *= ((beat - c.start) / c.fade_in).clamp(0.0, 1.0) as f32;
                     }

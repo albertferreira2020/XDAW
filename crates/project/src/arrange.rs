@@ -305,6 +305,73 @@ impl Track {
     }
 }
 
+impl Clip {
+    /// Mirrors the playable region for a source file `file_beats` long that has
+    /// been reversed; warp markers cannot be mirrored and are dropped.
+    pub fn reverse_region(&mut self, file_beats: Beats) {
+        let r = self.region;
+        self.region = ClipRegion { start: file_beats - r.end, loop_start: file_beats - r.end, end: file_beats - r.start, looping: r.looping };
+        if let ClipContent::Audio(a) = &mut self.content {
+            a.markers.clear();
+        }
+    }
+
+    /// An audio clip playing `media` (rendered at `bpm`) for `length` beats.
+    pub fn rendered_audio(id: Id, name: &str, color: [u8; 3], media: MediaRef, bpm: f64, length: Beats) -> Clip {
+        Clip {
+            id,
+            name: name.into(),
+            color,
+            content: ClipContent::Audio(AudioContent { media, warp: WarpMode::RePitch, source_bpm: bpm, markers: vec![], envelopes: vec![] }),
+            region: ClipRegion::looped(length),
+            launch_mode: Default::default(),
+            quantize: Default::default(),
+            legato: false,
+            gain_db: 0.0,
+            transpose: 0,
+            follow: Default::default(),
+        }
+    }
+}
+
+impl ArrangementClip {
+    /// Re-aligns this clip after its source was reversed (see `Clip::reverse_region`),
+    /// so the same stretch of timeline plays the same stretch of audio backwards.
+    pub fn reverse(&mut self, file_beats: Beats) {
+        let rl = self.clip.region.end - self.clip.region.start;
+        let looping = self.clip.region.looping;
+        let (o, len) = (self.offset, self.length);
+        self.clip.reverse_region(file_beats);
+        self.offset = if looping && rl > 1e-9 { (-(o + len)).rem_euclid(rl) } else { (rl - o - len).max(0.0) };
+    }
+}
+
+impl Track {
+    /// Replaces `[from, to)` with one audio clip (consolidation of rendered material).
+    pub fn replace_with_audio(&mut self, from: Beats, to: Beats, clip: Clip, mut new_id: impl FnMut() -> Id) {
+        self.clear_arrangement_range(from, to, &mut new_id);
+        self.arrangement.push(ArrangementClip { id: new_id(), start: from, length: to - from, offset: 0.0, fade_in: 0.0, fade_out: 0.0, clip });
+        self.arrangement.sort_by(|a, b| a.start.total_cmp(&b.start));
+    }
+
+    /// Commits a freeze: the rendered audio becomes the track's only content and
+    /// its devices are removed, leaving a plain audio track.
+    pub fn flatten_to_audio(&mut self, clip: Clip, length: Beats, clip_id: Id) {
+        self.kind = TrackKind::Audio;
+        self.devices.clear();
+        self.macros.clear();
+        for s in self.slots.iter_mut() {
+            *s = Slot::default();
+        }
+        self.automation.retain(|l| matches!(l.target, ParamTarget::Volume | ParamTarget::Pan | ParamTarget::Send(_)));
+        self.take_lanes.clear();
+        self.show_takes = false;
+        self.frozen = None;
+        self.mixer.input_channel = Some(0);
+        self.arrangement = vec![ArrangementClip { id: clip_id, start: 0.0, length, offset: 0.0, fade_in: 0.0, fade_out: 0.0, clip }];
+    }
+}
+
 impl TransportSettings {
     /// Range in which Arrangement recording writes: the loop brace when a punch
     /// switch is on, unbounded otherwise.
@@ -518,5 +585,53 @@ mod tests {
         v["transport"].as_object_mut().unwrap().remove("punch_in");
         let back: Project = serde_json::from_value(v).unwrap();
         assert!(back.locators.is_empty() && back.tracks[0].take_lanes.is_empty() && !back.transport.punch_in);
+    }
+
+    #[test]
+    fn reversing_mirrors_region_and_offset() {
+        // 8-beat file, clip plays beats 2..6 of it; arrangement shows its middle 1.5 beats from offset 1.
+        let mut c = audio(8.0);
+        c.region = ClipRegion { start: 2.0, loop_start: 2.0, end: 6.0, looping: false };
+        let mut a = arr(1, 10.0, 1.5, 1.0, c);
+        a.reverse(8.0);
+        assert_eq!((a.clip.region.start, a.clip.region.end), (2.0, 6.0), "symmetric region maps onto itself");
+        assert_eq!(a.offset, 1.5, "was 1.0 in, now mirrored: 4 - 1.0 - 1.5");
+        // Asymmetric region.
+        let mut c = audio(8.0);
+        c.region = ClipRegion { start: 0.0, loop_start: 0.0, end: 3.0, looping: true };
+        let mut b = arr(2, 0.0, 3.0, 0.0, c);
+        b.reverse(8.0);
+        assert_eq!((b.clip.region.start, b.clip.region.end), (5.0, 8.0));
+        assert_eq!(b.offset, 0.0);
+        // Reversing twice restores the alignment.
+        b.reverse(8.0);
+        assert_eq!((b.clip.region.start, b.clip.region.end, b.offset), (0.0, 3.0, 0.0));
+    }
+
+    #[test]
+    fn flatten_leaves_a_plain_audio_track() {
+        let mut p = Project::new("t");
+        p.add_scene("S");
+        let t = p.add_track(TrackKind::Midi, "M");
+        p.add_device(TrackRef::Track(t), DeviceKind::PolySynth);
+        p.tracks[t].arrangement.push(arr(1, 0.0, 4.0, 0.0, midi(vec![], 4.0)));
+        p.tracks[t].mixer.volume_db = -3.0;
+        let clip = Clip::rendered_audio(9, "Flattened", [1, 1, 1], MediaRef { path: "f.wav".into() }, 120.0, 8.0);
+        p.tracks[t].flatten_to_audio(clip, 8.0, 10);
+        let tr = &p.tracks[t];
+        assert_eq!(tr.kind, TrackKind::Audio);
+        assert!(tr.devices.is_empty() && tr.arrangement.len() == 1 && !tr.arrangement[0].clip.is_midi());
+        assert_eq!(tr.mixer.volume_db, -3.0, "mixer settings survive");
+        assert!(p.validate().is_empty(), "{:?}", p.validate());
+    }
+
+    #[test]
+    fn replace_with_audio_trims_neighbours() {
+        let mut p = Project::new("t");
+        let t = p.add_track(TrackKind::Audio, "A");
+        let tr = &mut p.tracks[t];
+        tr.arrangement.push(arr(1, 0.0, 8.0, 0.0, audio(8.0)));
+        tr.replace_with_audio(2.0, 4.0, audio(2.0), ids());
+        assert_eq!(tr.arrangement.iter().map(|c| (c.start, c.end())).collect::<Vec<_>>(), vec![(0.0, 2.0), (2.0, 4.0), (4.0, 8.0)]);
     }
 }

@@ -91,6 +91,8 @@ pub struct RtClip {
 }
 
 pub struct RtArrClip {
+    /// Short edge fades against clicks (off for frozen renders, which must stay sample-exact).
+    pub edges: bool,
     pub start: Beats,
     pub length: Beats,
     pub offset: Beats,
@@ -328,6 +330,7 @@ pub fn compile_arrangement(track: &model::Track, media: &dyn MediaSource, bpm: f
         .arrangement
         .iter()
         .map(|a| RtArrClip {
+            edges: true,
             start: a.start,
             length: a.length,
             offset: a.offset,
@@ -360,8 +363,13 @@ pub fn compile_automation(track: &model::Track) -> Vec<RtLane> {
 }
 
 fn compile_track(t: &model::Track, media: &dyn MediaSource, sr: f64, bpm: f64) -> RtTrack {
-    let devices = t
-        .devices
+    // A frozen track plays its rendered audio instead of its clips and devices.
+    let frozen_clip = t.frozen.as_ref().map(|f| {
+        let clip = model::Clip::rendered_audio(0, "Frozen", t.color, f.media.clone(), f.bpm, f.length);
+        RtArrClip { edges: false, start: 0.0, length: f.length, offset: 0.0, fade_in: 0.0, fade_out: 0.0, clip: compile_clip(&clip, media, bpm) }
+    });
+    let live_devices: &[model::DeviceState] = if frozen_clip.is_some() { &[] } else { &t.devices };
+    let devices = live_devices
         .iter()
         .map(|d| {
             let mut m = DeviceMedia::default();
@@ -393,9 +401,12 @@ fn compile_track(t: &model::Track, media: &dyn MediaSource, sr: f64, bpm: f64) -
         kind: t.kind,
         output_group: None,
         devices,
-        slots: t.slots.iter().map(|s| s.clip.as_ref().map(|c| compile_clip(c, media, bpm))).collect(),
+        slots: t.slots.iter().map(|s| s.clip.as_ref().filter(|_| frozen_clip.is_none()).map(|c| compile_clip(c, media, bpm))).collect(),
         slot_has_stop: t.slots.iter().map(|s| s.has_stop_button).collect(),
-        arrangement: compile_arrangement(t, media, bpm),
+        arrangement: match frozen_clip {
+            Some(c) => vec![c],
+            None => compile_arrangement(t, media, bpm),
+        },
         automation: compile_automation(t),
         mixer: RtMixer {
             volume_db: t.mixer.volume_db,

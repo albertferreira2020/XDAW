@@ -100,3 +100,63 @@ fn butt_joined_clips_without_crossfade_still_declick() {
     let (l, _) = render(&p, 8.0);
     assert!(l[at(4.0)].abs() < l[at(2.0)], "edge declick dips at the join");
 }
+
+fn synth_project() -> Project {
+    use xdaw_dsp::DeviceKind;
+    let mut p = Project::new("freeze");
+    p.transport.bpm = 120.0;
+    p.add_scene("S");
+    p.add_track(TrackKind::Midi, "M");
+    p.add_device(TrackRef::Track(0), DeviceKind::PolySynth);
+    p.add_device(TrackRef::Track(0), DeviceKind::Delay);
+    let id = p.alloc_id();
+    let notes = vec![Note { pitch: 60, start: 0.0, length: 1.0, velocity: 100 }, Note { pitch: 67, start: 2.0, length: 1.0, velocity: 90 }];
+    let clip = Clip {
+        id,
+        name: "m".into(),
+        color: [0; 3],
+        content: ClipContent::Midi { notes },
+        region: ClipRegion::looped(4.0),
+        launch_mode: Default::default(),
+        quantize: Default::default(),
+        legato: false,
+        gain_db: 0.0,
+        transpose: 0,
+        follow: Default::default(),
+    };
+    p.tracks[0].arrangement.push(ArrangementClip { id: 99, start: 0.0, length: 4.0, offset: 0.0, fade_in: 0.0, fade_out: 0.0, clip });
+    p.tracks[0].mixer.volume_db = -6.0;
+    p
+}
+
+#[test]
+fn frozen_track_plays_back_like_the_live_track() {
+    use xdaw_engine::export::render_track_offline;
+    let p = synth_project();
+    let s = ExportSettings { start: 0.0, end: 8.0, tail_seconds: 0.0, sample_rate: SR, format: SampleFormat::Float32, dither: false };
+    let (live_l, _, _) = render_offline(&p, &Media::new(), &s).unwrap();
+    // Freeze: render the track through its devices (mixer left out), 8 beats = 4 s.
+    let (fl, fr) = render_track_offline(&p, &Media::new(), 0, &s, true).unwrap();
+    assert!(fl.iter().any(|x| x.abs() > 0.01), "freeze rendered something");
+    let mut m = Media::new();
+    m.insert("frozen.wav".into(), Arc::new(SampleData { channels: vec![fl, fr], sample_rate: SR as f64 }));
+    let mut q = p.clone();
+    q.tracks[0].frozen = Some(Frozen { media: MediaRef { path: "frozen.wav".into() }, bpm: 120.0, length: 8.0 });
+    let (frozen_l, _, _) = render_offline(&q, &m, &s).unwrap();
+    let err = live_l.iter().zip(&frozen_l).map(|(a, b)| (a - b).abs()).fold(0.0f32, f32::max);
+    let peak = live_l.iter().fold(0.0f32, |a, b| a.max(b.abs()));
+    assert!(err < peak * 0.001, "max error {err} vs peak {peak}");
+}
+
+#[test]
+fn consolidated_audio_is_unity_gain_and_ignores_the_mixer() {
+    use xdaw_engine::export::render_track_offline;
+    let mut p = Project::new("x");
+    let c = clip(&mut p, vec![]);
+    let mut p2 = project(vec![(0.0, 4.0, 0.0, c)]);
+    p2.tracks[0].mixer.volume_db = -12.0;
+    p2.tracks[0].mixer.pan = 0.8;
+    let s = ExportSettings { start: 0.0, end: 4.0, tail_seconds: 0.0, sample_rate: SR, format: SampleFormat::Float32, dither: false };
+    let (l, r) = render_track_offline(&p2, &media(), 0, &s, false).unwrap();
+    assert!((l[at(2.0)] - 0.5).abs() < 1e-4 && (r[at(2.0)] - 0.5).abs() < 1e-4, "{} {}", l[at(2.0)], r[at(2.0)]);
+}

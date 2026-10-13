@@ -103,6 +103,43 @@ pub fn render_offline(
     Ok((l, r, nonfinite))
 }
 
+/// Renders one track on its own, without the mixer, returns or master chain:
+/// `with_devices` keeps its devices (freeze), otherwise only its clips (consolidate).
+/// Mixer volume, pan, sends and their automation are left out, so the result is unity gain.
+pub fn render_track_offline(
+    project: &Project,
+    media: &dyn MediaSource,
+    track: usize,
+    settings: &ExportSettings,
+    with_devices: bool,
+) -> Result<(Vec<f32>, Vec<f32>), ExportError> {
+    use xdaw_project::{ParamTarget, TrackKind};
+    let src = project.tracks.get(track).ok_or(ExportError::EmptyRange)?;
+    if src.kind == TrackKind::Group {
+        return Err(ExportError::Write { path: String::new(), reason: "group tracks cannot be rendered on their own".into() });
+    }
+    let mut t = src.clone();
+    t.frozen = None;
+    t.group = None;
+    t.slots.clear();
+    t.take_lanes.clear();
+    t.mixer = xdaw_project::Mixer::default();
+    t.mixer.input_channel = None;
+    t.automation.retain(|l| matches!(l.target, ParamTarget::Device { .. }));
+    if !with_devices {
+        t.devices.clear();
+        t.automation.clear();
+    }
+    let mut p = Project::new("render");
+    p.transport = project.transport.clone();
+    p.transport.loop_enabled = false;
+    p.transport.count_in_bars = 0;
+    p.transport.metronome = false;
+    p.tracks.push(t);
+    let (l, r, _) = render_offline(&p, media, settings)?;
+    Ok((l, r))
+}
+
 pub fn write_wav(path: &Path, l: &[f32], r: &[f32], sample_rate: u32, format: SampleFormat, dither: bool) -> Result<ExportReport, ExportError> {
     let werr = |e: hound::Error| ExportError::Write { path: path.display().to_string(), reason: e.to_string() };
     let (bits, sample_format) = match format {
