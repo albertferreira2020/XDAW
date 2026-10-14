@@ -1,7 +1,7 @@
 //! Horizontal zoom and scrolling shared by the Arrangement, the piano roll and
 //! the sample editor.
 //!
-//! Gestures (own spec, modelled on Live 10 §6.2 "Navigating the Arrangement"):
+//! Gestures (XDAW spec, docs/specs/arrangement.md):
 //! - pinch or Cmd+wheel: zoom around the pointer;
 //! - horizontal wheel or Shift+wheel: scroll;
 //! - scroll bar: drag the thumb to scroll, drag its ends to zoom, click the
@@ -85,7 +85,7 @@ impl HView {
     }
 }
 
-/// Live-style ruler gesture: vertical drag zooms around the press point,
+/// Ruler gesture: vertical drag zooms around the press point,
 /// horizontal drag scrolls. Call with the ruler's drag response.
 pub fn ruler_zoom(view: &mut HView, ui: &Ui, resp: &egui::Response, area: Rect) {
     let id = resp.id.with("ruler_zoom");

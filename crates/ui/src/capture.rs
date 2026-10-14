@@ -1,6 +1,6 @@
 //! Capture MIDI: turns recently played (unrecorded) notes into a clip.
 //!
-//! Specification (own; Live 10 §16.8 describes the workflow, not the limits):
+//! Specification (XDAW's own):
 //! - History per track: the last `MAX_NOTES` notes, dropping notes older than
 //!   `MAX_AGE_SECONDS` of output time.
 //! - The captured phrase is the latest run of notes without a gap longer than

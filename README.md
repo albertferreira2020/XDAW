@@ -2,11 +2,15 @@
 
 ![XDAW Arrangement view](docs/images/xdaw-arrangement.png)
 
-XDAW is an independent desktop DAW written in Rust. Its workflows are modeled on the public
-documentation of Ableton Live 10 (Session/Arrangement clip launching, recording, mixing and
-export), with its own name, look, instruments, presets and demo content. It contains no
-proprietary code, libraries or assets, and makes no claim of sound equivalence to any commercial
-product.
+XDAW is an independent desktop DAW written in Rust: a clip-launching Session grid, a linear
+Arrangement timeline, MIDI and audio recording, its own instruments and effects, mixing and
+export. Its name, code, file format, sounds, presets and look are its own. It contains no
+proprietary code, libraries or assets, is not affiliated with any DAW vendor, and makes no claim
+of sound equivalence to any commercial product (see [NOTICE](NOTICE)).
+
+Development follows a documented clean-room policy: the implementation is written against XDAW's
+own functional specifications, and the provenance of every outside source is recorded. See
+[docs/CLEAN_ROOM.md](docs/CLEAN_ROOM.md).
 
 Status: early milestone on **macOS Apple Silicon** (only platform built and tested). The core is
 portable; Windows and Linux are **not verified**. See [docs/FEATURE_MATRIX.md](docs/FEATURE_MATRIX.md)
@@ -60,9 +64,12 @@ Package `dist/XDAW.app` and a zip:
 - [Project file format](docs/PROJECT_FORMAT.md)
 - [Feature matrix and verification status](docs/FEATURE_MATRIX.md)
 - [Dependencies and licenses](docs/DEPENDENCIES.md)
-- [Research notes (Live 10 behaviour contracts)](docs/research/)
+- [Functional specifications](docs/specs/)
+- [Clean-room policy and provenance](docs/CLEAN_ROOM.md)
+- [Research notes (provenance record)](docs/research/)
 - [Progress log and next steps](docs/PROGRESS.md)
 
 ## License
 
-MIT OR Apache-2.0.
+MIT OR Apache-2.0 ([LICENSE-MIT](LICENSE-MIT), [LICENSE-APACHE](LICENSE-APACHE)). Contributions follow
+[CONTRIBUTING.md](CONTRIBUTING.md).

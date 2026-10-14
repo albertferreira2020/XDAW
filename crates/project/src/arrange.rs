@@ -409,6 +409,13 @@ mod tests {
     use super::*;
     use xdaw_dsp::DeviceKind;
 
+    #[test]
+    fn projects_saved_with_the_former_drum_device_name_still_load() {
+        let old: DeviceKind = serde_json::from_str("\"DrumRack\"").unwrap();
+        assert_eq!(old, DeviceKind::DrumKit);
+        assert_eq!(serde_json::to_string(&DeviceKind::DrumKit).unwrap(), "\"DrumKit\"");
+    }
+
     fn audio(len: f64) -> Clip {
         Clip {
             id: 0,

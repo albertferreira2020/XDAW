@@ -557,7 +557,8 @@ pub fn duplicate_clip(app: &mut XdawApp, t: usize, s: usize) {
     app.label("Duplicate Clip");
 }
 
-/// Live 10 §7.4.3: copy the currently playing clips into a new scene below and launch it.
+/// Copies the currently playing clips into a new scene below and launches it
+/// (spec: docs/specs/session-launching.md).
 pub fn capture_scene(app: &mut XdawApp) {
     let at = app.sel.scene + 1;
     let playing: Vec<i32> = (0..app.project.tracks.len()).map(|t| app.track_status(t).playing_slot.load(Ordering::Relaxed)).collect();
@@ -637,7 +638,7 @@ fn scene_launcher(app: &mut XdawApp, ui: &mut Ui, s: usize) {
     });
 }
 
-/// Launches a scene; names with "<n> BPM" or "x/y" change tempo/signature (Live 10 §7.2).
+/// Launches a scene; names with "<n> BPM" or "x/y" change tempo/signature (spec: docs/specs/session-launching.md).
 pub fn launch_scene(app: &mut XdawApp, s: usize) {
     let name = app.project.scenes[s].name.clone();
     if let Some(bpm) = parse_scene_tempo(&name) {

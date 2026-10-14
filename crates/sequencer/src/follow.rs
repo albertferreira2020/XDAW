@@ -1,4 +1,4 @@
-//! Follow Actions (Live 10 manual §13.6).
+//! Follow Actions (spec: docs/specs/session-launching.md).
 //!
 //! A group is a run of adjacent filled slots in one track. The Follow Action
 //! Time is measured from where play started. Two actions A/B are chosen by

@@ -16,7 +16,7 @@ Known gaps inside those items:
 - Clip envelopes exist for audio clips only (no MIDI controller envelopes, no pitch envelope).
 - Takes are one lane per pass; there is no packing of non-overlapping takes into one lane.
 - MIDI recording timing is block-accurate (about 5 ms at 256 frames), not sample-accurate.
-- Slicing ignores warp markers and caps at the Drum Rack's 16 pads.
+- Slicing ignores warp markers and caps at the Drum Kit's 16 pads.
 - Frozen audio follows tempo like Re-Pitch; it is not re-rendered when the tempo changes.
 - Reverse writes a new file and clears warp markers.
 

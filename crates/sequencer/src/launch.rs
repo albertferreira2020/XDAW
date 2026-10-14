@@ -1,11 +1,11 @@
 //! Per-track Session launch state machine.
 //!
-//! Contracts (docs/research/launch-quantization.md):
-//! - A track plays at most one Session clip at a time (Live 10 manual 7.2).
+//! Contracts (docs/specs/session-launching.md):
+//! - A track plays at most one Session clip at a time.
 //! - Launch/stop requests are scheduled to the next boundary of the resolved
 //!   quantization; at that boundary the previous clip stops and the new one
-//!   starts on the same sample (manual 13.3).
-//! - Legato launches take over the previous clip's play position (13.5).
+//!   starts on the same sample.
+//! - Legato launches take over the previous clip's play position.
 //! - Starting a Session clip or pressing a Clip Stop button releases the track
 //!   from Arrangement playback until "Back to Arrangement" (7.5).
 //!

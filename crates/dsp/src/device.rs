@@ -10,7 +10,9 @@ use std::sync::Arc;
 pub enum DeviceKind {
     PolySynth,
     Sampler,
-    DrumRack,
+    /// Projects written before 2026-10-13 store this kind under its former name (alias below).
+    #[serde(alias = "DrumRack")]
+    DrumKit,
     Gain,
     Eq3,
     Filter,
@@ -24,7 +26,7 @@ impl DeviceKind {
     pub const ALL: [DeviceKind; 10] = [
         DeviceKind::PolySynth,
         DeviceKind::Sampler,
-        DeviceKind::DrumRack,
+        DeviceKind::DrumKit,
         DeviceKind::Gain,
         DeviceKind::Eq3,
         DeviceKind::Filter,
@@ -38,7 +40,7 @@ impl DeviceKind {
         match self {
             DeviceKind::PolySynth => "Poly",
             DeviceKind::Sampler => "Sampler",
-            DeviceKind::DrumRack => "Drum Rack",
+            DeviceKind::DrumKit => "Drum Kit",
             DeviceKind::Gain => "Utility",
             DeviceKind::Eq3 => "EQ Three-Band",
             DeviceKind::Filter => "Filter",
@@ -50,14 +52,14 @@ impl DeviceKind {
     }
 
     pub fn is_instrument(self) -> bool {
-        matches!(self, DeviceKind::PolySynth | DeviceKind::Sampler | DeviceKind::DrumRack)
+        matches!(self, DeviceKind::PolySynth | DeviceKind::Sampler | DeviceKind::DrumKit)
     }
 
     pub fn params(self) -> &'static [ParamDesc] {
         match self {
             DeviceKind::PolySynth => SYNTH_PARAMS,
             DeviceKind::Sampler => SAMPLER_PARAMS,
-            DeviceKind::DrumRack => DRUM_PARAMS,
+            DeviceKind::DrumKit => DRUM_PARAMS,
             DeviceKind::Gain => GAIN_PARAMS,
             DeviceKind::Eq3 => EQ_PARAMS,
             DeviceKind::Filter => FILTER_PARAMS,
@@ -78,7 +80,7 @@ impl DeviceKind {
 pub enum Device {
     PolySynth(Box<Synth>),
     Sampler(Box<Sampler>),
-    DrumRack(Box<DrumRack>),
+    DrumKit(Box<DrumKit>),
     Gain(Box<GainFx>),
     Eq3(Box<Eq3>),
     Filter(Box<FilterFx>),
@@ -88,7 +90,7 @@ pub enum Device {
     Reverb(Box<Reverb>),
 }
 
-/// Media a device needs at construction (sampler and drum rack).
+/// Media a device needs at construction (sampler and drum kit).
 #[derive(Default, Clone)]
 pub struct DeviceMedia {
     pub sample: Option<Arc<SampleData>>,
@@ -101,7 +103,7 @@ impl Device {
         match kind {
             DeviceKind::PolySynth => Device::PolySynth(Box::new(Synth::new(sr))),
             DeviceKind::Sampler => Device::Sampler(Box::new(Sampler::new(sr, media.sample))),
-            DeviceKind::DrumRack => Device::DrumRack(Box::new(DrumRack::new(sr, media.pads))),
+            DeviceKind::DrumKit => Device::DrumKit(Box::new(DrumKit::new(sr, media.pads))),
             DeviceKind::Gain => Device::Gain(Box::new(GainFx::new(sr))),
             DeviceKind::Eq3 => Device::Eq3(Box::new(Eq3::new(sr))),
             DeviceKind::Filter => Device::Filter(Box::new(FilterFx::new(sr))),
@@ -116,7 +118,7 @@ impl Device {
         match self {
             Device::PolySynth(_) => DeviceKind::PolySynth,
             Device::Sampler(_) => DeviceKind::Sampler,
-            Device::DrumRack(_) => DeviceKind::DrumRack,
+            Device::DrumKit(_) => DeviceKind::DrumKit,
             Device::Gain(_) => DeviceKind::Gain,
             Device::Eq3(_) => DeviceKind::Eq3,
             Device::Filter(_) => DeviceKind::Filter,
@@ -131,7 +133,7 @@ impl Device {
         match self {
             Device::PolySynth(d) => d.set_param(i, v),
             Device::Sampler(d) => d.set_param(i, v),
-            Device::DrumRack(d) => d.set_param(i, v),
+            Device::DrumKit(d) => d.set_param(i, v),
             Device::Gain(d) => d.set_param(i, v),
             Device::Eq3(d) => d.set_param(i, v),
             Device::Filter(d) => d.set_param(i, v),
@@ -146,7 +148,7 @@ impl Device {
         match self {
             Device::PolySynth(d) => d.param_values(),
             Device::Sampler(d) => d.param_values(),
-            Device::DrumRack(d) => d.param_values(),
+            Device::DrumKit(d) => d.param_values(),
             Device::Gain(d) => d.param_values(),
             Device::Eq3(d) => d.param_values(),
             Device::Filter(d) => d.param_values(),
@@ -174,7 +176,7 @@ impl Device {
         match self {
             Device::PolySynth(d) => d.render(events, l, r, ctx),
             Device::Sampler(d) => d.render(events, l, r, ctx),
-            Device::DrumRack(d) => d.render(events, l, r, ctx),
+            Device::DrumKit(d) => d.render(events, l, r, ctx),
             Device::Gain(d) => d.process(l, r),
             Device::Eq3(d) => d.process(l, r),
             Device::Filter(d) => d.process(l, r),
@@ -195,7 +197,7 @@ impl Device {
                 let old = a.swap_sample(new);
                 b.swap_sample(old);
             }
-            (Device::DrumRack(a), Device::DrumRack(b)) => {
+            (Device::DrumKit(a), Device::DrumKit(b)) => {
                 let mut tmp: [Option<Arc<SampleData>>; PADS] = Default::default();
                 b.swap_samples(&mut tmp); // tmp = new media, b empty
                 a.swap_samples(&mut tmp); // a = new media, tmp = old

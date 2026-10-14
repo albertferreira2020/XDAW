@@ -194,7 +194,7 @@ fn device_box(app: &mut XdawApp, ui: &mut Ui, r: TrackRef, i: usize) -> Option<A
             if d.kind == DeviceKind::Sampler {
                 sample_slot(app, ui, r, i, None, d.sample.as_ref());
             }
-            if d.kind == DeviceKind::DrumRack {
+            if d.kind == DeviceKind::DrumKit {
                 drum_pads(app, ui, r, i, &d);
                 return;
             }

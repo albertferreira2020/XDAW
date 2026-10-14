@@ -1,5 +1,8 @@
 # Sources
 
+> Provenance record (research role, see `../CLEAN_ROOM.md`). Implementation work reads
+> `../specs/`, not these notes.
+
 The current ableton.com site documents Live 12 and must not define the target. The Live 10
 URLs (`/en/live-manual/10/...`) redirect to themselves without a session (redirect loop), and
 `help.ableton.com` returned HTTP 403 to automated fetches. The Live 10 Reference Manual was

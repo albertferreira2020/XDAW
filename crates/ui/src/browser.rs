@@ -330,16 +330,16 @@ fn make_clip(app: &mut XdawApp, path: &Path, content: ClipContent, beats: f64, t
     }
 }
 
-/// Loads a sample on a MIDI track: the next free Drum Rack pad, else the
+/// Loads a sample on a MIDI track: the next free Drum Kit pad, else the
 /// track's Sampler, else a new Sampler.
 pub fn load_into_instrument(app: &mut XdawApp, track: usize, path: &Path) {
     let r = TrackRef::Track(track);
     let devices = &app.project.tracks[track].devices;
-    if let Some(i) = devices.iter().position(|d| d.kind == DeviceKind::DrumRack) {
+    if let Some(i) = devices.iter().position(|d| d.kind == DeviceKind::DrumKit) {
         let pad = devices[i].pads.iter().position(|p| p.is_none());
         if let Some(pad) = pad {
             assign_sample(app, r, i, Some(pad), path);
-            app.status_line = format!("Loaded on Drum Rack pad {}", pad + 1);
+            app.status_line = format!("Loaded on Drum Kit pad {}", pad + 1);
             return;
         }
     }
@@ -355,7 +355,7 @@ pub fn load_into_instrument(app: &mut XdawApp, track: usize, path: &Path) {
     app.status_line = "Sample loaded into Sampler".into();
 }
 
-/// Assigns a sample to a Sampler, or to a Drum Rack pad.
+/// Assigns a sample to a Sampler, or to a Drum Kit pad.
 pub fn assign_sample(app: &mut XdawApp, r: TrackRef, device: usize, pad: Option<usize>, path: &Path) {
     let media = media_ref_for(app, path);
     app.media.request(&media.path, io::resolve_media(&media, app.project_dir().as_deref()));

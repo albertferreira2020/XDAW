@@ -2,7 +2,7 @@
 //!
 //! They become ordinary `BrowserItem::File` drag payloads, so every target that
 //! accepts browser files (Session slots, Arrangement lanes, track-creation
-//! zones, Sampler and Drum Rack pads) also accepts OS drops, with the same
+//! zones, Sampler and Drum Kit pads) also accepts OS drops, with the same
 //! hover highlights. Further files of a multi-file drop go to
 //! `XdawApp::extra_drop` and are placed after the first one by the target.
 //!

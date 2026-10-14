@@ -1,10 +1,9 @@
 //! Launch quantization grids.
 //!
-//! Reference: Live 10 manual 13.3 documents a per-clip chooser with "None",
-//! "Global" and explicit values; the Control Bar holds the Global value. The
-//! value list below follows the Live 10 Control Bar chooser (bars and note
-//! values). Boundaries for note values are measured from the start of the
-//! current bar (own proposal; see docs/research/launch-quantization.md).
+//! Each clip chooses "None", "Global" or an explicit grid; the transport holds
+//! the Global value. Grids are whole bars or note values. Boundaries for note
+//! values are measured from the start of the current bar
+//! (spec: docs/specs/session-launching.md).
 
 use crate::time::{Beats, TimeSignature};
 use serde::{Deserialize, Serialize};

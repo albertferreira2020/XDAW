@@ -9,7 +9,7 @@
 - **Browser** (left): instruments, effects, presets, the current project folder and added folders.
   Drag items onto slots, track headers, the device area or the empty "drop to create track" column;
   files can also be dragged straight from Finder (several files fill consecutive slots). A sample
-  dropped on a MIDI track loads into its Drum Rack (next free pad) or a Sampler;
+  dropped on a MIDI track loads into its Drum Kit (next free pad) or a Sampler;
   double-click loads onto the selected track/slot.
 - **Main area**: Session or Arrangement (Tab switches).
 - **Detail panel** (bottom): Clip (properties, piano roll or audio regions) or Devices.
@@ -60,9 +60,9 @@
 
 ## Devices
 
-Instruments go first on MIDI tracks (Poly, Sampler, Drum Rack); effects follow in order. Use ◀ ▶ to
+Instruments go first on MIDI tracks (Poly, Sampler, Drum Kit); effects follow in order. Use ◀ ▶ to
 reorder, "On" to bypass, "..." to save a preset, reset or delete. Drop audio files on the Sampler's
-sample field or on Drum Rack pads. Knobs: drag vertically (Shift for fine), double-click to reset.
+sample field or on Drum Kit pads. Knobs: drag vertically (Shift for fine), double-click to reset.
 
 ## Files
 

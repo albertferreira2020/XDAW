@@ -24,7 +24,7 @@ impl Default for TimeSignature {
 }
 
 impl TimeSignature {
-    /// Validates the Live 10 documented range: numerator 1–99, denominator 1, 2, 4, 8 or 16.
+    /// Validates XDAW's range: numerator 1–99, denominator 1, 2, 4, 8 or 16.
     pub fn new(numerator: u32, denominator: u32) -> Option<Self> {
         let ok = (1..=99).contains(&numerator) && matches!(denominator, 1 | 2 | 4 | 8 | 16);
         ok.then_some(Self { numerator, denominator })
@@ -88,7 +88,7 @@ pub fn seconds_to_beats(seconds: f64, bpm: f64) -> Beats {
     seconds * bpm / 60.0
 }
 
-/// Lowest and highest tempo accepted, matching the documented Live 10 tempo range.
+/// Lowest and highest tempo accepted.
 pub const MIN_BPM: f64 = 20.0;
 pub const MAX_BPM: f64 = 999.0;
 

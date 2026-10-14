@@ -1,4 +1,8 @@
-# Feature matrix (Live 10 workflows → XDAW)
+# Feature matrix
+
+The "Reference" column is a provenance record: it says which public documentation section a
+requirement was learned from (see `CLEAN_ROOM.md`). The requirement itself is stated in
+`docs/specs/`.
 
 Status legend:
 
@@ -45,8 +49,8 @@ Platform: macOS 26.6.2, Apple M5, built-in output at 48 kHz. Windows/Linux: **no
 | Scene name tempo/time signature ("96 BPM", "7/8") | L10 §7.2 | Verified (parser) | `scene_names_parse_like_live_10` |
 | Capture and Insert Scene | L10 §7.4.3 | Implemented, unverified | |
 | Duplicate/rename/color/move/copy clips, drag & drop | L10 §7.4 | Partial: drops verified (scripted UI); rename/color/move unverified | Browser → slot (`bass.wav` on Drums slot 1); Finder drop of 2 files → consecutive slots, scene added; drop zone → new track; undo |
-| Samples dragged from Finder (OS file drop) onto slots, lanes, drop zones, Sampler/Drum Rack | Own (Live 10 §5 behaviour) | Verified (simulated OS drop through the same raw-input path); real Finder drag unverified | `filedrop.rs`; script `osdrop`; macOS pointer read via Core Graphics during the drag |
-| Audio file dropped on a MIDI track loads an instrument | L10 §5 | Verified (scripted UI) | drop on Beat → "Loaded on Drum Rack pad 9" |
+| Samples dragged from Finder (OS file drop) onto slots, lanes, drop zones, Sampler/Drum Kit | Own (Live 10 §5 behaviour) | Verified (simulated OS drop through the same raw-input path); real Finder drag unverified | `filedrop.rs`; script `osdrop`; macOS pointer read via Core Graphics during the drag |
+| Audio file dropped on a MIDI track loads an instrument | L10 §5 | Verified (scripted UI) | drop on Beat → "Loaded on Drum Kit pad 9" |
 | Follow Actions (No Action, Stop, Play Again, Previous, Next, First, Last, Any, Other; chances A/B; group = adjacent clips) | L10 §13.6 | Verified (engine); UI controls unverified | `follow_actions_chain_clips_at_exact_times_and_stop`, sequencer follow tests; Previous wrap at group top is an inference |
 
 ## Arrangement View
@@ -92,7 +96,7 @@ Platform: macOS 26.6.2, Apple M5, built-in output at 48 kHz. Windows/Linux: **no
 | Latency compensation | prompt | Not needed yet | all built-in devices are zero-latency |
 | Poly synth (2 PolyBLEP osc, SVF, 2 ADSR, 16 voices) | Own | Verified | voice stealing, sustain, release tests |
 | Sampler (Hermite interpolation, ADSR, root key) | Own | Verified | `sampler_plays_at_root_rate_and_octave_up` |
-| Drum Rack (16 pads, C1–D#2) | Own | Verified | `drum_pad_maps_note_to_pad` |
+| Drum Kit (16 pads, C1–D#2) | Own | Verified | `drum_pad_maps_note_to_pad` |
 | Utility, EQ Three-Band, Filter, Compressor, Echo Delay (synced), Room Reverb | Own | Verified (signal tests) | silence, gain, filter response, compressor curve, delay timing, reverb decay, NaN recovery |
 | Arrangement audio recording on armed tracks with punch in/out (loop brace) and one take per loop pass | L10 §16 | Verified (engine tests); UI path with a real input device not exercised | `arrangement_record_honours_the_punch_window`, `arrangement_record_makes_one_take_per_loop_pass_and_stops_with_transport` |
 | Arrangement MIDI recording on armed tracks into take lanes (block-accurate timing, punch window, loop passes) | L10 §16 | Verified (unit + scripted UI) | `arrec` tests; script: two notes recorded → `Take 1` lane + comp |
@@ -107,7 +111,7 @@ Platform: macOS 26.6.2, Apple M5, built-in output at 48 kHz. Windows/Linux: **no
 | Clip envelopes for audio clips (gain, pan) with the same tools | L10 §11 | Verified (engine render tests + scripted UI); MIDI clip envelopes not implemented | `gain_envelope_follows_its_ramp`, `pan_envelope_moves_the_clip_to_one_side` |
 | Crossfades between touching audio clips, fade handles | L10 §8 | Verified (model + engine); menu action not exercised by mouse | `crossfade_keeps_a_constant_level_through_the_overlap` |
 | Reverse, Consolidate (audio unity render, MIDI unrolled) | L10 §8 | Verified (scripted UI: files written, clips repointed, undo); audible check of reversed audio not done | `reversing_mirrors_region_and_offset`, `consolidated_audio_is_unity_gain_and_ignores_the_mixer` |
-| Slice to New MIDI Track (grid or transients → Drum Rack pads + MIDI clip) | L10 §8 | Verified (detector tests, scripted UI creates track/pads/clip); playback fidelity of the sliced rack is not null-tested | `slicing::tests` |
+| Slice to New MIDI Track (grid or transients → Drum Kit pads + MIDI clip) | L10 §8 | Verified (detector tests, scripted UI creates track/pads/clip); playback fidelity of the sliced rack is not null-tested | `slicing::tests` |
 | Limiter (gain, ceiling, release; zero latency, brickwall) | Own | Verified (signal + export tests) | output never above ceiling, quiet audio untouched, release recovers, master export peak held at -1 dB |
 | Factory presets for Utility, EQ Three-Band, Limiter | Own | Verified (data/engine tests); UI menu not exercised by script | ids/ranges valid, applied via device `Presets` menu and Browser > Presets (drag or double-click) |
 | Device order, bypass, presets (JSON, id-keyed) | prompt | Implemented, unverified (UI) | |

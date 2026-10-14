@@ -1,0 +1,14 @@
+XDAW
+Copyright (c) 2026 Albert de Almeida Ferreira
+
+Licensed under the MIT License or the Apache License 2.0, at your option
+(see LICENSE-MIT and LICENSE-APACHE).
+
+XDAW is an independent product. It is not affiliated with, endorsed by, sponsored by or
+derived from the code of Ableton AG or any other DAW vendor. "Ableton" and "Live" are
+trademarks of Ableton AG; other product names are trademarks of their respective owners.
+They are mentioned only in the provenance records (docs/CLEAN_ROOM.md and docs/research/)
+to identify the public documentation that was read, never as the name of an XDAW feature.
+
+Third-party components and their licenses are listed in docs/DEPENDENCIES.md.
+The demo samples in crates/engine/src/demo.rs are synthesized by XDAW's own code.

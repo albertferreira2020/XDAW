@@ -196,7 +196,7 @@ pub struct DeviceState {
     /// Sampler source.
     #[serde(default)]
     pub sample: Option<MediaRef>,
-    /// Drum Rack pads (16).
+    /// Drum Kit pads (16).
     #[serde(default)]
     pub pads: Vec<Option<MediaRef>>,
     #[serde(default)]
@@ -211,7 +211,7 @@ impl DeviceState {
             params: kind.params().iter().map(|p| p.default).collect(),
             bypass: false,
             sample: None,
-            pads: if kind == DeviceKind::DrumRack { vec![None; xdaw_dsp::instruments::PADS] } else { vec![] },
+            pads: if kind == DeviceKind::DrumKit { vec![None; xdaw_dsp::instruments::PADS] } else { vec![] },
             preset_name: None,
         }
     }
@@ -339,7 +339,7 @@ pub struct Clip {
     /// Transposition in semitones (MIDI: note offset; audio Re-Pitch: rate change).
     #[serde(default)]
     pub transpose: i32,
-    /// Session Follow Actions (Live 10 §13.6).
+    /// Session Follow Actions (spec: docs/specs/session-launching.md).
     #[serde(default)]
     pub follow: xdaw_sequencer::FollowActions,
 }

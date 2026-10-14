@@ -22,7 +22,7 @@ Crates (dependencies point inward):
 | Crate | Responsibility |
 | --- | --- |
 | `sequencer` | Musical clock (sample-anchored tempo segments), bars/beats/samples conversions, launch quantization, per-track launch state machine, clip-local looping. Pure and allocation-free. |
-| `dsp` | Parameter descriptors, smoothing, filters, envelopes, oscillators, instruments (Poly, Sampler, Drum Rack), effects (Utility, EQ, Filter, Compressor, Echo Delay, Room Reverb), enum device dispatch. |
+| `dsp` | Parameter descriptors, smoothing, filters, envelopes, oscillators, instruments (Poly, Sampler, Drum Kit), effects (Utility, EQ, Filter, Compressor, Echo Delay, Room Reverb), enum device dispatch. |
 | `midi` | Message parsing, midir input, computer keyboard mapping, SMF import/export. |
 | `project` | Serializable model, validation, reversible edits/history, atomic save, autosave/recovery, media resolution and collection. |
 | `engine` | Graph compilation, `Renderer`, command/event protocol, reconciler, media decoding/cache, CPAL I/O, disk recorder, offline export, demo generator, headless tools. |

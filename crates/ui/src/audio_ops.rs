@@ -275,7 +275,7 @@ pub fn slice_points(data: &SampleData, from_s: f64, to_s: f64, bpm: f64, mode: S
     }
 }
 
-/// Builds a MIDI track with a Drum Rack of the slices and a clip that replays them.
+/// Builds a MIDI track with a Drum Kit of the slices and a clip that replays them.
 /// Works on the selected Arrangement clip, else on the open Session clip.
 pub fn slice_to_midi(app: &mut XdawApp, mode: SliceMode) {
     enum Src {
@@ -339,7 +339,7 @@ pub fn slice_to_midi(app: &mut XdawApp, mode: SliceMode) {
     }
     let idx = app.project.add_track(TrackKind::Midi, &format!("{} Slices", clip.name));
     app.project.tracks[idx].color = clip.color;
-    let dev = app.project.add_device(TrackRef::Track(idx), xdaw_dsp::DeviceKind::DrumRack);
+    let dev = app.project.add_device(TrackRef::Track(idx), xdaw_dsp::DeviceKind::DrumKit);
     if let Some(d) = app.project.tracks[idx].devices.iter_mut().find(|d| d.id == dev) {
         d.pads = pads;
         d.preset_name = Some("Slices".into());
@@ -371,5 +371,5 @@ pub fn slice_to_midi(app: &mut XdawApp, mode: SliceMode) {
     }
     app.select_track(TrackRef::Track(idx));
     app.label("Slice to New MIDI Track");
-    app.status_line = format!("Sliced into {} pads{}", points.len(), if capped { " (limited to the Drum Rack's 16 pads)" } else { "" });
+    app.status_line = format!("Sliced into {} pads{}", points.len(), if capped { " (limited to the Drum Kit's 16 pads)" } else { "" });
 }

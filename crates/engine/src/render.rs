@@ -1179,7 +1179,7 @@ fn render_track_source(t: &mut RtTrack, ti: usize, span: &Span, sig: xdaw_sequen
 
 /// Turns a due Follow Action into a pending launch/stop at its exact time
 /// (quantized only by an explicit clip quantization: Follow Actions bypass the
-/// global quantization, Live 10 §13.6).
+/// global quantization; spec: docs/specs/session-launching.md).
 fn schedule_follow_action(t: &mut RtTrack, from: Beats, to: Beats, sig: xdaw_sequencer::TimeSignature) {
     let Some(f) = t.rt.follow_at else { return };
     if f >= to || t.rt.launcher.pending.is_some_and(|p| p.at() <= f) {

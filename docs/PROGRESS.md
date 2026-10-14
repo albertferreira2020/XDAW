@@ -114,3 +114,15 @@ Repository: `~/Documents/XDAW` (local git, branch `main`, no remote yet). REA li
   audio; fixed and covered by a test.
 - Not verified: real input-device recording through the UI, mouse comping drag, audible check of reverse
   and slices.
+
+## Clean-room policy and provenance (2026-10-13)
+- `docs/CLEAN_ROOM.md`: factual provenance record up to `d188377` (public manual only, no third-party
+  binary ever present, own assets) and the policy for future work (research → spec → implementation).
+  It states openly that the earlier phase was not a two-team clean room.
+- `docs/specs/`: XDAW's own functional specs; code comments now cite these instead of the manual.
+- Device "Drum Rack" renamed **Drum Kit** (`#[serde(alias = "DrumRack")]` keeps old projects loading).
+- README reworded (no "modeled on" a named product), `NOTICE` (trademark/non-affiliation),
+  `LICENSE-MIT`, `LICENSE-APACHE`, `CONTRIBUTING.md` (DCO sign-off, spec trailers).
+- Guard test `crates/project/tests/clean_room.rs` fails on third-party product, manual or file-format
+  references in code, specs, scripts and README. Tests: 135 pass.
+- Not done: legal review (needs a lawyer); git history is intentionally not rewritten.

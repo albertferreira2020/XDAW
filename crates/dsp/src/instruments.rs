@@ -1,5 +1,5 @@
 //! Original instruments: polyphonic subtractive synth ("Poly"), a pitched
-//! sampler ("Sampler") and a 16-pad drum rack ("Drum Rack").
+//! sampler ("Sampler") and a 16-pad drum kit ("Drum Kit").
 
 use crate::env::{Adsr, Osc, Wave};
 use crate::filter::{Svf, SvfMode};
@@ -404,7 +404,7 @@ impl Sampler {
     }
 }
 
-// ---------------------------------------------------------------- Drum rack
+// ---------------------------------------------------------------- Drum kit
 
 pub const PADS: usize = 16;
 /// First pad note (C1 in the C3 = 60 convention).
@@ -454,7 +454,7 @@ const fn pad_params() -> [ParamDesc; PADS * PAD_PARAMS_EACH] {
 pub const DRUM_PARAMS: &[ParamDesc] = &pad_params();
 const VOICES_PER_PAD: usize = 4;
 
-pub struct DrumRack {
+pub struct DrumKit {
     params: [f32; PADS * PAD_PARAMS_EACH],
     samples: [Option<Arc<SampleData>>; PADS],
     voices: [[SampleVoice; VOICES_PER_PAD]; PADS],
@@ -462,7 +462,7 @@ pub struct DrumRack {
     sr: f32,
 }
 
-impl DrumRack {
+impl DrumKit {
     pub fn param_values(&self) -> &[f32] {
         &self.params
     }
@@ -642,7 +642,7 @@ mod tests {
         let click = Arc::new(SampleData { channels: vec![vec![1.0; 64]], sample_rate: 48_000.0 });
         let mut samples: [Option<Arc<SampleData>>; PADS] = Default::default();
         samples[1] = Some(click);
-        let mut d = DrumRack::new(48_000.0, samples);
+        let mut d = DrumKit::new(48_000.0, samples);
         let (mut l, mut r) = (vec![0.0; 128], vec![0.0; 128]);
         d.render(&[on(0, 36)], &mut l, &mut r, &CTX);
         assert!(l.iter().all(|&x| x == 0.0), "pad 1 is empty");

@@ -358,7 +358,7 @@ pub fn build_demo(dir: &Path) -> Result<Project, String> {
     p.master.devices[0].params = vec![-10.0, 2.0, 15.0, 150.0, 6.0, 1.0];
 
     // Instruments.
-    let drum = p.add_device(TrackRef::Track(4), DeviceKind::DrumRack);
+    let drum = p.add_device(TrackRef::Track(4), DeviceKind::DrumKit);
     let pads = ["kick.wav", "snare.wav", "clap.wav", "hat_closed.wav", "hat_open.wav", "tom.wav", "rim.wav", "perc.wav"];
     let rack = p.tracks[4].devices.iter_mut().find(|d| d.id == drum).unwrap();
     for (i, f) in pads.iter().enumerate() {
