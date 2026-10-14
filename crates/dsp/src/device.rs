@@ -10,7 +10,8 @@ use crate::effects::*;
 use crate::instruments::*;
 use crate::midi_fx::*;
 use crate::modulation::*;
-use crate::params::{Ctx, NoteEvent, ParamDesc};
+use crate::params::{Ctx, NoteEvent, NoteKind, ParamDesc};
+use crate::rack::*;
 use crate::synths::*;
 use crate::tone::*;
 use serde::{Deserialize, Serialize};
@@ -142,6 +143,8 @@ devices! {
     Saturator(Saturator) = "Saturator", SAT_PARAMS, AudioEffect, |sr, m| Saturator::new(sr);
     Chorus(Chorus) = "Chorus", CHORUS_PARAMS, AudioEffect, |sr, m| Chorus::new(sr);
     Phaser(Phaser) = "Phaser", PHASER_PARAMS, AudioEffect, |sr, m| Phaser::new(sr);
+    InstrumentRack(Rack) = "Instrument Rack", NO_PARAMS, Instrument, |sr, m| Rack::new(sr, true);
+    EffectRack(Rack) = "Effect Rack", NO_PARAMS, AudioEffect, |sr, m| Rack::new(sr, false);
     Delay(Delay) = "Echo Delay", DELAY_PARAMS, AudioEffect, |sr, m| Delay::new(sr);
     Reverb(Reverb) = "Room Reverb", REVERB_PARAMS, AudioEffect, |sr, m| Reverb::new(sr);
     Arpeggiator(Arpeggiator) = "Arpeggiator", ARP_PARAMS, MidiEffect, |sr, m| Arpeggiator::new(sr);
@@ -152,7 +155,14 @@ devices! {
     VelocityShaper(VelocityShaper) = "Velocity Shaper", VELOCITY_PARAMS, MidiEffect, |sr, m| VelocityShaper::new();
 }
 
+/// Racks have no parameters of their own; their chains' parameters are laid out by `RackLayout`.
+const NO_PARAMS: &[ParamDesc] = &[];
+
 impl DeviceKind {
+    pub fn is_rack(self) -> bool {
+        matches!(self, DeviceKind::InstrumentRack | DeviceKind::EffectRack)
+    }
+
     pub fn is_instrument(self) -> bool {
         self.category() == Category::Instrument
     }
@@ -233,8 +243,71 @@ impl Device {
                 a.swap_samples(&mut tmp); // a = new media, tmp = old
                 b.swap_samples(&mut tmp); // b holds old media
             }
+            (Device::InstrumentRack(a), Device::InstrumentRack(b)) | (Device::EffectRack(a), Device::EffectRack(b)) => {
+                for (x, y) in a.device_pairs(b) {
+                    x.exchange_media(y);
+                }
+            }
             _ => {}
         }
+    }
+
+    /// True when `other` can hand its running state to this device (same kind and, for racks, same chains).
+    pub fn same_shape(&self, other: &Device) -> bool {
+        match (self, other) {
+            (Device::InstrumentRack(a), Device::InstrumentRack(b)) | (Device::EffectRack(a), Device::EffectRack(b)) => a.same_shape(b),
+            _ => self.kind() == other.kind(),
+        }
+    }
+
+    pub fn as_rack_mut(&mut self) -> Option<&mut Rack> {
+        match self {
+            Device::InstrumentRack(r) | Device::EffectRack(r) => Some(r),
+            _ => None,
+        }
+    }
+}
+
+/// A device in a chain, with its bypass and sidechain source.
+pub trait ChainSlot {
+    fn device(&mut self) -> &mut Device;
+    fn bypassed(&self) -> bool;
+    /// Track index whose buffer feeds this device's detector.
+    fn sidechain(&self) -> Option<usize> {
+        None
+    }
+}
+
+/// Runs a chain (spec D1): MIDI effects transform `events` (double-buffered
+/// with `events_b`, re-sorted after each), instruments and audio effects
+/// process `l`/`r`. `sidechain(i)` returns the buffers of track `i`. Leaves
+/// `events` holding the last events; the caller clears them.
+pub fn run_chain<'s, S: ChainSlot>(
+    slots: &mut [S],
+    events: &mut Vec<NoteEvent>,
+    events_b: &mut Vec<NoteEvent>,
+    l: &mut [f32],
+    r: &mut [f32],
+    ctx: &Ctx,
+    sidechain: &dyn Fn(usize) -> Option<(&'s [f32], &'s [f32])>,
+) {
+    let n = l.len();
+    let key = |e: &NoteEvent| (e.offset, matches!(e.kind, NoteKind::On { .. }));
+    events.sort_unstable_by_key(key);
+    for s in slots.iter_mut() {
+        if s.bypassed() {
+            continue;
+        }
+        let sc = s.sidechain().and_then(sidechain).filter(|(a, b)| a.len() >= n && b.len() >= n).map(|(a, b)| (&a[..n], &b[..n]));
+        let d = s.device();
+        if d.kind().is_midi_effect() {
+            events_b.clear();
+            d.process_midi(events, events_b, n, ctx);
+            std::mem::swap(events, events_b);
+            events.sort_unstable_by_key(key);
+            continue;
+        }
+        d.process(Io { events, l: &mut *l, r: &mut *r, sidechain: sc }, ctx);
     }
 }
 

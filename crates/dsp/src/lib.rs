@@ -15,11 +15,12 @@ pub mod modulation;
 pub mod params;
 pub mod slicing;
 pub mod presets;
+pub mod rack;
 pub mod stretch;
 pub mod synths;
 pub mod tone;
 pub mod util;
 
-pub use device::{Category, Device, DeviceKind, DeviceMedia, Io};
+pub use device::{run_chain, Category, ChainSlot, Device, DeviceKind, DeviceMedia, Io};
 pub use instruments::SampleData;
 pub use params::{Ctx, NoteEvent, NoteKind, ParamDesc, ParamKind};

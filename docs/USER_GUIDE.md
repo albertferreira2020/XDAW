@@ -70,6 +70,10 @@ for fine), double-click to reset.
 - **Parametric EQ**: pick a band with 1–8, switch it On, choose its type; the curve shows the sum.
 - **Sidechain**: Compressor, Bus Compressor and Gate have a Sidechain chooser; pick another track
   to duck or gate this one with it (a muted source still works).
+- **Racks**: add an Instrument Rack (MIDI tracks) or Effect Rack, press **+ Chain**, select a chain
+  and drop devices on "Drop into …". Each chain has an on switch (A), Solo, volume and, in
+  Instrument Racks, a key zone, so one rack can split the keyboard. Right-click a chain to delete it.
+  The track's macros can map any parameter inside a rack.
 - **Limiter Lookahead**: smoother limiting at the cost of a few milliseconds of latency, which XDAW
   compensates on all other tracks automatically.
 

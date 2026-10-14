@@ -185,3 +185,49 @@ fn midi_effects_and_instruments_are_rejected_on_audio_tracks() {
     p.tracks[t].devices.push(DeviceState::new(999, DeviceKind::ChordStack));
     assert!(build_graph(&p, &media(), SR as f64).is_err());
 }
+
+fn rms(x: &[f32]) -> f32 {
+    (x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32).sqrt()
+}
+
+#[test]
+fn instrument_rack_splits_notes_between_chains_by_key_zone() {
+    let render_note = |pitch: u8| {
+        let mut p = new_project();
+        let t = p.add_track(TrackKind::Midi, "Rack");
+        let r = TrackRef::Track(t);
+        let rack = p.add_device(r, DeviceKind::InstrumentRack);
+        let low = p.add_chain(r, rack).unwrap();
+        let high = p.add_chain(r, rack).unwrap();
+        p.add_device_to_chain(r, low, DeviceKind::PolySynth).unwrap();
+        p.add_device_to_chain(r, high, DeviceKind::FmSynth).unwrap();
+        p.tracks[t].set_param(low, 5, 59.0); // Key High
+        p.tracks[t].set_param(high, 4, 60.0); // Key Low
+        p.tracks[t].set_param(high, 2, 1.0); // mute the high chain
+        place(&mut p, t, 0.0, 2.0, ClipContent::Midi { notes: vec![Note { pitch, start: 0.0, length: 1.0, velocity: 110, chance: 100 }] });
+        let (l, _) = render(&p, 2.0);
+        rms(&l[..at(1.0)])
+    };
+    assert!(render_note(48) > 0.01, "the low chain plays C2");
+    assert!(render_note(72) < 1e-6, "C4 goes only to the muted high chain");
+}
+
+#[test]
+fn automation_reaches_a_device_inside_an_effect_rack() {
+    let mut p = new_project();
+    let t = p.add_track(TrackKind::Audio, "A");
+    let r = TrackRef::Track(t);
+    place(&mut p, t, 0.0, 4.0, audio("dc"));
+    let rack = p.add_device(r, DeviceKind::EffectRack);
+    let chain = p.add_chain(r, rack).unwrap();
+    let util = p.add_device_to_chain(r, chain, DeviceKind::Gain).unwrap();
+    let static_level = render(&p, 2.0).0[at(1.0)];
+    assert!((static_level - 0.5).abs() < 1e-3, "unity rack: {static_level}");
+    p.tracks[t].automation.push(AutomationLane {
+        target: ParamTarget::Device { device: util, param: 0 },
+        points: vec![AutomationPoint { beat: 0.0, value: -12.0 }, AutomationPoint { beat: 4.0, value: -12.0 }],
+    });
+    let automated = render(&p, 2.0).0[at(1.0)];
+    let expected = 0.5 * 10f32.powf(-12.0 / 20.0);
+    assert!((automated - expected).abs() < 1e-3, "automated {automated} vs {expected}");
+}

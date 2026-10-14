@@ -16,6 +16,22 @@ struct DeviceKey {
     pads: Vec<Option<String>>,
     /// Sidechain source: changing it changes the processing order.
     sidechain: Option<u64>,
+    /// Rack chains (id, devices). Devices inside chains also key their bypass,
+    /// which has no live command.
+    chains: Vec<(u64, Vec<DeviceKey>)>,
+    inner_bypass: Option<bool>,
+}
+
+fn device_key(d: &xdaw_project::DeviceState, inner: bool) -> DeviceKey {
+    DeviceKey {
+        id: d.id,
+        kind: d.kind,
+        sample: d.sample.as_ref().map(|m| m.path.clone()),
+        pads: d.pads.iter().map(|p| p.as_ref().map(|m| m.path.clone())).collect(),
+        sidechain: d.sidechain,
+        chains: d.chains.iter().map(|c| (c.id, c.devices.iter().map(|x| device_key(x, true)).collect())).collect(),
+        inner_bypass: inner.then_some(d.bypass),
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -42,17 +58,7 @@ fn track_key(t: &Track) -> TrackKey {
     TrackKey {
         id: t.id,
         kind: t.kind,
-        devices: t
-            .devices
-            .iter()
-            .map(|d| DeviceKey {
-                id: d.id,
-                kind: d.kind,
-                sample: d.sample.as_ref().map(|m| m.path.clone()),
-                pads: d.pads.iter().map(|p| p.as_ref().map(|m| m.path.clone())).collect(),
-                sidechain: d.sidechain,
-            })
-            .collect(),
+        devices: t.devices.iter().map(|d| device_key(d, false)).collect(),
         stops: t.slots.iter().map(|s| s.has_stop_button).collect(),
         group: t.group,
         frozen: t.frozen.as_ref().map(|f| (f.media.path.clone(), f.bpm.to_bits(), f.length.to_bits())),
@@ -172,6 +178,24 @@ impl Reconciler {
                         send(Command::SetDeviceParam { track: tix, device: di as u16, param: pi as u16, value: y.param(pi) });
                     }
                 }
+                // Rack chains: same structure here (structure changes rebuild), so diff by position.
+                if y.kind.is_rack() {
+                    let layout = crate::graph::rack_layout(y);
+                    for (ci, (cx, cy)) in x.chains.iter().zip(&y.chains).enumerate() {
+                        for pi in 0..xdaw_dsp::rack::CHAIN_PARAMS.len() {
+                            if cx.param(pi) != cy.param(pi) {
+                                send(Command::SetDeviceParam { track: tix, device: di as u16, param: layout.chain_param(ci, pi) as u16, value: cy.param(pi) });
+                            }
+                        }
+                        for (xi, (dx, dy)) in cx.devices.iter().zip(&cy.devices).enumerate() {
+                            for pi in 0..dy.kind.params().len() {
+                                if dx.param(pi) != dy.param(pi) {
+                                    send(Command::SetDeviceParam { track: tix, device: di as u16, param: layout.device_param(ci, xi, pi) as u16, value: dy.param(pi) });
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
         self.synced = Some(p.clone());
@@ -249,6 +273,39 @@ mod tests {
         assert_eq!(names(&cmds)[0], "graph");
         assert!(!rec.needs_sync(&p, 0));
         assert!(rec.needs_sync(&p, 1), "new media triggers a rebuild");
+    }
+
+    #[test]
+    fn rack_edits_send_flat_parameters_and_structure_changes_rebuild() {
+        use xdaw_project::TrackRef;
+        let media: HashMap<String, std::sync::Arc<xdaw_dsp::SampleData>> = HashMap::new();
+        let mut p = Project::new("x");
+        p.add_scene("A");
+        let t = p.add_track(TrackKind::Audio, "A");
+        let rack = p.add_device(TrackRef::Track(t), xdaw_dsp::DeviceKind::EffectRack);
+        let c1 = p.add_chain(TrackRef::Track(t), rack).unwrap();
+        let c2 = p.add_chain(TrackRef::Track(t), rack).unwrap();
+        let util = p.add_device_to_chain(TrackRef::Track(t), c2, xdaw_dsp::DeviceKind::Gain).unwrap();
+        let mut rec = Reconciler::new(48_000.0);
+        rec.sync(&p, &media, 0, |_| {}).unwrap();
+        // A parameter of a device inside chain 2: one command at its flat index.
+        let mut cmds = vec![];
+        p.tracks[t].set_param(util, 0, -6.0);
+        p.tracks[t].set_param(c1, 0, -3.0);
+        rec.sync(&p, &media, 0, |c| cmds.push(c)).unwrap();
+        let layout = crate::graph::rack_layout(&p.tracks[t].devices[0]);
+        let mut sent: Vec<(u16, f32)> = cmds.iter().filter_map(|c| if let Command::SetDeviceParam { param, value, .. } = c { Some((*param, *value)) } else { None }).collect();
+        sent.sort_by_key(|x| x.0);
+        assert_eq!(sent, vec![(layout.chain_param(0, 0) as u16, -3.0), (layout.device_param(1, 0, 0) as u16, -6.0)]);
+        // Adding a device to a chain or bypassing a chained device rebuilds.
+        cmds.clear();
+        p.add_device_to_chain(TrackRef::Track(t), c1, xdaw_dsp::DeviceKind::Saturator).unwrap();
+        rec.sync(&p, &media, 0, |c| cmds.push(c)).unwrap();
+        assert_eq!(names(&cmds)[0], "graph");
+        cmds.clear();
+        p.tracks[t].device_mut(util).unwrap().bypass = true;
+        rec.sync(&p, &media, 0, |c| cmds.push(c)).unwrap();
+        assert_eq!(names(&cmds)[0], "graph");
     }
 
     #[test]

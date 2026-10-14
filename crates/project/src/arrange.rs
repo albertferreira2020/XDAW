@@ -409,6 +409,88 @@ mod tests {
     use super::*;
     use xdaw_dsp::DeviceKind;
 
+    fn rack_project() -> (Project, usize, Id, Id, Id) {
+        let mut p = Project::new("r");
+        p.add_scene("S");
+        let t = p.add_track(TrackKind::Midi, "M");
+        let rack = p.add_device(TrackRef::Track(t), DeviceKind::InstrumentRack);
+        let chain = p.add_chain(TrackRef::Track(t), rack).unwrap();
+        let synth = p.add_device_to_chain(TrackRef::Track(t), chain, DeviceKind::PolySynth).unwrap();
+        (p, t, rack, chain, synth)
+    }
+
+    #[test]
+    fn chain_rules_keep_sections_and_forbid_nesting() {
+        let (mut p, t, _rack, chain, synth) = rack_project();
+        let r = TrackRef::Track(t);
+        let arp = p.add_device_to_chain(r, chain, DeviceKind::Arpeggiator).unwrap();
+        let sat = p.add_device_to_chain(r, chain, DeviceKind::Saturator).unwrap();
+        let ids: Vec<Id> = p.tracks[t].devices[0].chains[0].devices.iter().map(|d| d.id).collect();
+        assert_eq!(ids, vec![arp, synth, sat]);
+        assert!(p.add_device_to_chain(r, chain, DeviceKind::EffectRack).is_err());
+        // A second instrument replaces the first.
+        p.add_device_to_chain(r, chain, DeviceKind::FmSynth).unwrap();
+        assert_eq!(p.tracks[t].devices[0].chains[0].devices.iter().filter(|d| d.kind.is_instrument()).count(), 1);
+        // Moves stay inside the section.
+        assert!(!p.tracks[t].move_device(sat, false));
+        let fx = p.add_device(TrackRef::Track(t), DeviceKind::EffectRack);
+        let fx_chain = p.add_chain(r, fx).unwrap();
+        assert!(p.add_device_to_chain(r, fx_chain, DeviceKind::PolySynth).is_err(), "effect racks take audio effects only");
+        assert!(p.validate().is_empty(), "{:?}", p.validate());
+    }
+
+    #[test]
+    fn parameters_inside_racks_are_addressed_by_id_for_macros_and_cleanup() {
+        let (mut p, t, _rack, chain, synth) = rack_project();
+        let tr = &mut p.tracks[t];
+        assert!(tr.set_param(synth, 5, 500.0));
+        assert_eq!(tr.param_value(synth, 5), Some(500.0));
+        assert!(tr.set_param(chain, 0, -12.0));
+        assert_eq!(tr.param_label(chain, 0).unwrap(), "Instrument Rack › Chain 1: Volume");
+        assert!(tr.param_targets().iter().any(|(t, _)| *t == ParamTarget::Device { device: synth, param: 5 }));
+        // A macro reaches the chained synth's cutoff.
+        tr.ensure_macros();
+        tr.macros[0].mappings.push(MacroMapping { device: synth, param: 5, min: 100.0, max: 1000.0 });
+        tr.macros[0].value = 1.0;
+        tr.apply_macros();
+        assert!((tr.param_value(synth, 5).unwrap() - 1000.0).abs() < 0.5);
+        tr.automation.push(AutomationLane { target: ParamTarget::Device { device: chain, param: 0 }, points: vec![] });
+        // Removing the rack forgets automation and mappings of everything inside it.
+        let rack_id = tr.devices[0].id;
+        assert!(tr.remove_device(rack_id));
+        assert!(tr.automation.is_empty());
+        assert!(tr.macros[0].mappings.is_empty());
+    }
+
+    #[test]
+    fn duplicating_a_track_renews_ids_inside_racks_and_remaps_macros() {
+        let (mut p, t, _rack, chain, synth) = rack_project();
+        p.tracks[t].ensure_macros();
+        p.tracks[t].macros[0].mappings.push(MacroMapping { device: synth, param: 5, min: 100.0, max: 1000.0 });
+        p.tracks[t].automation.push(AutomationLane { target: ParamTarget::Device { device: chain, param: 0 }, points: vec![] });
+        let c = p.duplicate_track(t);
+        let copy = &p.tracks[c];
+        let new_synth = copy.devices[0].chains[0].devices[0].id;
+        let new_chain = copy.devices[0].chains[0].id;
+        assert_ne!(new_synth, synth);
+        assert_ne!(new_chain, chain);
+        assert_eq!(copy.macros[0].mappings[0].device, new_synth);
+        assert_eq!(copy.automation[0].target, ParamTarget::Device { device: new_chain, param: 0 });
+        assert_eq!(p.tracks[t].macros[0].mappings[0].device, synth, "the original keeps its ids");
+    }
+
+    #[test]
+    fn racks_round_trip_through_json_and_old_devices_load_without_chains() {
+        let (p, ..) = rack_project();
+        let json = serde_json::to_string(&p).unwrap();
+        let back: Project = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, p);
+        let old = r#"{"id":1,"kind":"Gain","params":[0.0,0.0,1.0],"bypass":false}"#;
+        let d: DeviceState = serde_json::from_str(old).unwrap();
+        assert!(d.chains.is_empty() && d.sidechain.is_none());
+        assert!(!serde_json::to_string(&d).unwrap().contains("chains"), "no chains key for plain devices");
+    }
+
     #[test]
     fn projects_saved_with_the_former_drum_device_name_still_load() {
         let old: DeviceKind = serde_json::from_str("\"DrumRack\"").unwrap();

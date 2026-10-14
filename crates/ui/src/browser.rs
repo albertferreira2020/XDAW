@@ -236,22 +236,33 @@ pub fn load_factory(app: &mut XdawApp, r: TrackRef, kind: DeviceKind, index: usi
 /// return to their defaults so a preset never inherits the previous sound).
 fn apply_preset(app: &mut XdawApp, r: TrackRef, kind: DeviceKind, name: &str, value_of: impl Fn(&str) -> Option<f32>) {
     let track = app.project.track(r);
-    let idx = match track.devices.iter().position(|d| d.kind == kind) {
-        Some(i) => i,
+    let id = match track.devices.iter().find(|d| d.kind == kind) {
+        Some(d) => d.id,
         None => {
             if kind.needs_midi_track() && track.kind != TrackKind::Midi {
                 app.status_line = format!("{} presets need a MIDI track", kind.name());
                 return;
             }
-            let id = app.project.add_device(r, kind);
-            app.project.track(r).devices.iter().position(|d| d.id == id).unwrap_or(0)
+            app.project.add_device(r, kind)
         }
     };
-    let d = &mut app.project.track_mut(r).devices[idx];
+    write_preset(app, r, id, name, value_of);
+}
+
+/// Writes a preset into the device with this id (top level or inside a rack chain).
+fn write_preset(app: &mut XdawApp, r: TrackRef, id: Id, name: &str, value_of: impl Fn(&str) -> Option<f32>) {
+    let Some(d) = app.project.track_mut(r).device_mut(id) else { return };
     // Parameters are matched by id so presets survive parameter reordering.
-    d.params = kind.params().iter().map(|p| value_of(p.id).map_or(p.default, |v| p.clamp(v))).collect();
+    d.params = d.kind.params().iter().map(|p| value_of(p.id).map_or(p.default, |v| p.clamp(v))).collect();
     d.preset_name = Some(name.to_string());
     app.label("Load Preset");
+}
+
+/// Loads built-in preset `index` into the device with this id.
+pub fn load_factory_into(app: &mut XdawApp, r: TrackRef, id: Id, index: usize) {
+    let Some(kind) = app.project.track(r).device(id).map(|d| d.kind) else { return };
+    let Some(p) = factory_presets(kind).get(index) else { return };
+    write_preset(app, r, id, p.name, |k| p.params.iter().find(|(x, _)| *x == k).map(|(_, v)| *v));
 }
 
 /// Creates a clip from an audio or MIDI file in a Session slot.
@@ -332,31 +343,27 @@ fn make_clip(app: &mut XdawApp, path: &Path, content: ClipContent, beats: f64, t
 pub fn load_into_instrument(app: &mut XdawApp, track: usize, path: &Path) {
     let r = TrackRef::Track(track);
     let devices = &app.project.tracks[track].devices;
-    if let Some(i) = devices.iter().position(|d| d.kind == DeviceKind::DrumKit) {
-        let pad = devices[i].pads.iter().position(|p| p.is_none());
-        if let Some(pad) = pad {
-            assign_sample(app, r, i, Some(pad), path);
+    if let Some(d) = devices.iter().find(|d| d.kind == DeviceKind::DrumKit) {
+        if let Some(pad) = d.pads.iter().position(|p| p.is_none()) {
+            assign_sample(app, r, d.id, Some(pad), path);
             app.status_line = format!("Loaded on Drum Kit pad {}", pad + 1);
             return;
         }
     }
-    let i = match app.project.tracks[track].devices.iter().position(|d| d.kind == DeviceKind::Sampler) {
-        Some(i) => i,
-        None => {
-            let id = app.project.add_device(r, DeviceKind::Sampler);
-            app.project.tracks[track].devices.iter().position(|d| d.id == id).unwrap_or(0)
-        }
+    let id = match app.project.tracks[track].devices.iter().find(|d| d.kind == DeviceKind::Sampler) {
+        Some(d) => d.id,
+        None => app.project.add_device(r, DeviceKind::Sampler),
     };
-    assign_sample(app, r, i, None, path);
+    assign_sample(app, r, id, None, path);
     app.detail = crate::app::Detail::Devices;
     app.status_line = "Sample loaded into Sampler".into();
 }
 
 /// Assigns a sample to a Sampler, or to a Drum Kit pad.
-pub fn assign_sample(app: &mut XdawApp, r: TrackRef, device: usize, pad: Option<usize>, path: &Path) {
+pub fn assign_sample(app: &mut XdawApp, r: TrackRef, device: Id, pad: Option<usize>, path: &Path) {
     let media = media_ref_for(app, path);
     app.media.request(&media.path, io::resolve_media(&media, app.project_dir().as_deref()));
-    let d = &mut app.project.track_mut(r).devices[device];
+    let Some(d) = app.project.track_mut(r).device_mut(device) else { return };
     match pad {
         Some(p) if p < d.pads.len() => d.pads[p] = Some(media),
         _ => d.sample = Some(media),

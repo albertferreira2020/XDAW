@@ -5,6 +5,7 @@
 use crate::protocol::{MAX_RETURNS, MAX_TRACKS};
 use xdaw_dsp::instruments::{PADS, SampleData};
 use xdaw_dsp::util::{db_to_gain, Smoothed};
+use xdaw_dsp::rack::{RackLayout, RackSlot, CHAIN_PARAMS};
 use xdaw_dsp::{Device, DeviceKind, DeviceMedia, NoteEvent};
 use xdaw_project::{self as model, ClipContent, Id, Monitor, ParamTarget, Project, TrackKind, WarpMode};
 use xdaw_sequencer::{Beats, ClipQuantize, ClipRegion, LaunchMode, Quantize, TimeSignature, TrackLauncher};
@@ -449,7 +450,8 @@ pub fn compile_automation(track: &model::Track) -> Vec<RtLane> {
                 ParamTarget::Pan => RtTarget::Pan,
                 ParamTarget::Send(i) => RtTarget::Send(i),
                 ParamTarget::Device { device, param } => {
-                    RtTarget::Device { device: track.devices.iter().position(|d| d.id == device)?, param }
+                    let (device, param) = param_address(track, device, param)?;
+                    RtTarget::Device { device, param }
                 }
             };
             Some(RtLane { target, points: l.points.iter().map(|p| (p.beat, p.value)).collect() })
@@ -457,23 +459,62 @@ pub fn compile_automation(track: &model::Track) -> Vec<RtLane> {
         .collect()
 }
 
+/// Builds a device with its media and parameters; racks get their chains (allocates).
+fn compile_device(d: &model::DeviceState, media: &dyn MediaSource, sr: f64) -> Device {
+    let mut m = DeviceMedia::default();
+    m.sample = d.sample.as_ref().and_then(|s| media.get(s));
+    for (i, pad) in d.pads.iter().enumerate().take(PADS) {
+        m.pads[i] = pad.as_ref().and_then(|s| media.get(s));
+    }
+    let mut device = Device::new(d.kind, sr as f32, m);
+    for i in 0..d.kind.params().len() {
+        device.set_param(i, d.param(i));
+    }
+    if let Some(rack) = device.as_rack_mut() {
+        rack.set_capacity(MAX_BLOCK, MAX_EVENTS);
+        for c in &d.chains {
+            let slots = c.devices.iter().map(|x| RackSlot { device: compile_device(x, media, sr), bypass: x.bypass }).collect();
+            let params: Vec<f32> = (0..CHAIN_PARAMS.len()).map(|i| c.param(i)).collect();
+            rack.push_chain(slots, &params);
+        }
+    }
+    device
+}
+
+/// Layout of a model rack's flat parameter space.
+pub fn rack_layout(rack: &model::DeviceState) -> RackLayout {
+    let kinds: Vec<Vec<DeviceKind>> = rack.chains.iter().map(|c| c.devices.iter().map(|d| d.kind).collect()).collect();
+    RackLayout::new(kinds.iter().map(Vec::as_slice))
+}
+
+/// Engine address (device index in the track, parameter index) of parameter
+/// `param` of the device, rack chain or chained device with id `id` (spec D6.5).
+pub fn param_address(track: &model::Track, id: Id, param: usize) -> Option<(usize, usize)> {
+    for (di, d) in track.devices.iter().enumerate() {
+        if d.id == id {
+            return Some((di, param));
+        }
+        if !d.kind.is_rack() {
+            continue;
+        }
+        for (ci, c) in d.chains.iter().enumerate() {
+            if c.id == id {
+                return (param < CHAIN_PARAMS.len()).then(|| (di, rack_layout(d).chain_param(ci, param)));
+            }
+            if let Some(xi) = c.devices.iter().position(|x| x.id == id) {
+                return (param < c.devices[xi].kind.params().len()).then(|| (di, rack_layout(d).device_param(ci, xi, param)));
+            }
+        }
+    }
+    None
+}
+
 fn compile_track(t: &model::Track, media: &dyn MediaSource, sr: f64, bpm: f64) -> RtTrack {
     // A frozen track plays its rendered audio instead of its clips and devices.
     let live_devices: &[model::DeviceState] = if t.frozen.is_some() { &[] } else { &t.devices };
     let devices = live_devices
         .iter()
-        .map(|d| {
-            let mut m = DeviceMedia::default();
-            m.sample = d.sample.as_ref().and_then(|s| media.get(s));
-            for (i, pad) in d.pads.iter().enumerate().take(PADS) {
-                m.pads[i] = pad.as_ref().and_then(|s| media.get(s));
-            }
-            let mut device = Device::new(d.kind, sr as f32, m);
-            for i in 0..d.kind.params().len() {
-                device.set_param(i, d.param(i));
-            }
-            RtDevice { id: d.id, device, bypass: d.bypass, sidechain: None }
-        })
+        .map(|d| RtDevice { id: d.id, device: compile_device(d, media, sr), bypass: d.bypass, sidechain: None })
         .collect();
     let mut sends_db = [model::SEND_OFF_DB; MAX_RETURNS];
     for (i, s) in t.mixer.sends_db.iter().enumerate().take(MAX_RETURNS) {
@@ -658,7 +699,7 @@ pub fn transfer_state(old: &mut Graph, new: &mut Graph) {
         }
         // Devices with the same identity keep their DSP state (voices, delay lines).
         for nd in new.devices.iter_mut() {
-            if let Some(od) = o.devices.iter_mut().find(|od| od.id == nd.id && od.device.kind() == nd.device.kind()) {
+            if let Some(od) = o.devices.iter_mut().find(|od| od.id == nd.id && od.device.same_shape(&nd.device)) {
                 std::mem::swap(&mut od.device, &mut nd.device);
                 // `nd.device` now has the running state; bring the new snapshot's
                 // media and parameters in, and leave the old media to retire.
@@ -674,6 +715,18 @@ pub fn transfer_state(old: &mut Graph, new: &mut Graph) {
         track(&mut old.returns, t);
     }
     track(std::slice::from_mut(&mut old.master), &mut new.master);
+}
+
+impl xdaw_dsp::ChainSlot for RtDevice {
+    fn device(&mut self) -> &mut Device {
+        &mut self.device
+    }
+    fn bypassed(&self) -> bool {
+        self.bypass
+    }
+    fn sidechain(&self) -> Option<usize> {
+        self.sidechain
+    }
 }
 
 pub fn device_kind_is_instrument(kind: DeviceKind) -> bool {

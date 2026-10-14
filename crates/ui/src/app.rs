@@ -1167,13 +1167,8 @@ impl XdawApp {
                         }
                     }
                     ParamTarget::Device { device, param } => {
-                        if let Some(d) = t.devices.iter_mut().find(|d| d.id == device) {
-                            if let Some(desc) = d.kind.params().get(param) {
-                                let v = desc.from_normalized(n);
-                                if let Some(p) = d.params.get_mut(param) {
-                                    *p = v;
-                                }
-                            }
+                        if let Some(desc) = t.param_desc(device, param) {
+                            t.set_param(device, param, desc.from_normalized(n));
                         }
                     }
                 }

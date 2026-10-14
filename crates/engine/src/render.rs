@@ -7,7 +7,7 @@
 use crate::graph::*;
 use crate::protocol::*;
 use xdaw_dsp::util::{db_to_gain, pan_gains};
-use xdaw_dsp::{Ctx, Io, NoteEvent, NoteKind};
+use xdaw_dsp::{Ctx, NoteEvent, NoteKind};
 use xdaw_project::{Monitor, TrackKind, WarpMode};
 use xdaw_sequencer::{Beats, Clock, LaunchEvent, LaunchMode, Quantize, TrackLauncher};
 use rtrb::{Consumer, Producer};
@@ -1432,24 +1432,9 @@ fn render_tail(t: &mut RtTrack, span: &Span, a: usize, b: usize) {
 /// (double-buffered, re-sorted after each), instruments and audio effects
 /// process the audio. `sc_*` are the sidechain source buffers by track index.
 fn run_devices(t: &mut RtTrack, n: usize, ctx: &Ctx, sc_l: &[Vec<f32>], sc_r: &[Vec<f32>]) {
-    let key = |e: &NoteEvent| (e.offset, matches!(e.kind, NoteKind::On { .. }));
-    t.events.sort_unstable_by_key(key);
     let RtTrack { devices, events, events_b, l, r, .. } = t;
-    let (l, r) = (&mut l[..n], &mut r[..n]);
-    for d in devices.iter_mut() {
-        if d.bypass {
-            continue;
-        }
-        if d.device.kind().is_midi_effect() {
-            events_b.clear();
-            d.device.process_midi(events, events_b, n, ctx);
-            std::mem::swap(events, events_b);
-            events.sort_unstable_by_key(key);
-            continue;
-        }
-        let sidechain = d.sidechain.and_then(|s| Some((sc_l.get(s).filter(|b| b.len() >= n)?, sc_r.get(s).filter(|b| b.len() >= n)?))).map(|(a, b)| (&a[..n], &b[..n]));
-        d.device.process(Io { events, l: &mut *l, r: &mut *r, sidechain }, ctx);
-    }
+    let sidechain = |s: usize| Some((sc_l.get(s)?.as_slice(), sc_r.get(s)?.as_slice()));
+    xdaw_dsp::run_chain(devices, events, events_b, &mut l[..n], &mut r[..n], ctx, &sidechain);
     events.clear();
 }
 

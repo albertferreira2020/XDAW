@@ -150,3 +150,15 @@ Repository: `~/Documents/XDAW` (local git, branch `main`, no remote yet). REA li
 - Bug found by tests: the Warm saturator curve exceeded ±1 with bias; now normalised.
 - Real-time check (scripted, playing): callback mean 0.09 ms, max 0.17 ms of a 5.3 ms budget.
 - Not verified: listening tests (timbre), live MIDI keyboard through MIDI effects, GR meters (not shown).
+
+## Racks (2026-10-13)
+- Spec D6. `dsp::rack`: `Rack` processor and `RackLayout` (one flat parameter space: chain params, then
+  each chained device's params), used by the DSP, `graph::param_address` and the sync diff.
+- `run_chain` moved into `dsp::device`; the engine track chain and rack chains share it.
+- Model: `Chain` (settings are parameters), one id-based parameter API on `Track` (`param_owner`,
+  `param_value`, `set_param`, `param_targets`, `device_mut`, `remove_device`, `move_device`).
+  Six UI call sites that each searched `track.devices` by id now use it, so automation, MIDI mapping
+  and macros reach inside racks.
+- Bug fixed while moving duplication into the model (`Project::duplicate_track`): duplicated tracks kept
+  macro mappings pointing at the original track's devices.
+- Tests: 186 pass. Not verified: chain editing by mouse, listening tests.

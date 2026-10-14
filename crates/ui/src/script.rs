@@ -255,6 +255,28 @@ impl Script {
                         None => println!("[script] adddevice: unknown kind"),
                     }
                 }
+                "addchain" | "chaindevice" => {
+                    // addchain <track>: new chain on the track's last rack.
+                    // chaindevice <track> <Kind>: device into that rack's last chain.
+                    let t = (num(0) as usize).saturating_sub(1);
+                    let r = xdaw_project::TrackRef::Track(t);
+                    let Some(rack) = app.project.tracks[t].devices.iter().rev().find(|d| d.kind.is_rack()).map(|d| (d.id, d.chains.last().map(|c| c.id))) else {
+                        println!("[script] {cmd}: no rack");
+                        continue;
+                    };
+                    let result = if cmd == "addchain" {
+                        app.project.add_chain(r, rack.0).ok_or_else(|| "failed".to_string())
+                    } else {
+                        let kind = xdaw_dsp::DeviceKind::ALL.iter().find(|k| format!("{k:?}") == args.get(1).copied().unwrap_or("")).copied();
+                        match (rack.1, kind) {
+                            (Some(c), Some(k)) => app.project.add_device_to_chain(r, c, k),
+                            _ => Err("no chain or unknown kind".into()),
+                        }
+                    };
+                    app.label(cmd);
+                    let shape: Vec<Vec<xdaw_dsp::DeviceKind>> = app.project.tracks[t].devices.iter().rev().find(|d| d.kind.is_rack()).map(|d| d.chains.iter().map(|c| c.devices.iter().map(|x| x.kind).collect()).collect()).unwrap_or_default();
+                    println!("[script] {cmd} {:?} rack={shape:?}", result.map(|_| ()));
+                }
                 "panel" => println!("[script] panel detail_h={:.1}", app.detail_h),
                 "detail" => app.detail = if args.first() == Some(&"clip") { Detail::Clip } else { Detail::Devices },
                 "scene" => crate::session::launch_scene(app, (num(0) as usize).saturating_sub(1)),

@@ -1,7 +1,8 @@
 //! Project data model. Owned by the UI thread; the engine receives compiled snapshots.
 
 use crate::arrange::*;
-use xdaw_dsp::{Category, DeviceKind};
+use xdaw_dsp::rack::CHAIN_PARAMS;
+use xdaw_dsp::{Category, DeviceKind, ParamDesc};
 use xdaw_sequencer::{Beats, ClipQuantize, ClipRegion, LaunchMode, Quantize, TimeSignature};
 use serde::{Deserialize, Serialize};
 
@@ -158,21 +159,192 @@ pub struct Macro {
 impl Track {
     /// Writes every macro's mapped parameters from its value (call after a macro change).
     pub fn apply_macros(&mut self) {
-        for m in &self.macros {
+        let macros = self.macros.clone();
+        for m in &macros {
             for map in &m.mappings {
-                if let Some(d) = self.devices.iter_mut().find(|d| d.id == map.device) {
-                    if let Some(desc) = d.kind.params().get(map.param) {
-                        // Interpolate in the parameter's normalised space so log parameters sweep naturally.
-                        let (a, b) = (desc.to_normalized(map.min), desc.to_normalized(map.max));
-                        let v = desc.from_normalized(a + (b - a) * m.value.clamp(0.0, 1.0));
-                        if d.params.len() <= map.param {
-                            d.params.resize(desc_len(d.kind), 0.0);
-                        }
-                        d.params[map.param] = v;
-                    }
+                if let Some(desc) = self.param_desc(map.device, map.param) {
+                    // Interpolate in the parameter's normalised space so log parameters sweep naturally.
+                    let (a, b) = (desc.to_normalized(map.min), desc.to_normalized(map.max));
+                    self.set_param(map.device, map.param, desc.from_normalized(a + (b - a) * m.value.clamp(0.0, 1.0)));
                 }
             }
         }
+    }
+
+    /// Every device of the track, including devices inside rack chains (depth-first).
+    pub fn all_devices(&self) -> Vec<&DeviceState> {
+        let mut out = vec![];
+        for d in &self.devices {
+            out.push(d);
+            for c in &d.chains {
+                out.extend(c.devices.iter());
+            }
+        }
+        out
+    }
+
+    /// The device, chain or chained device with this id and its parameters.
+    pub fn param_owner(&self, id: Id) -> Option<ParamOwner<'_>> {
+        for d in &self.devices {
+            if d.id == id {
+                return Some(ParamOwner { label: d.kind.name().into(), descs: d.kind.params(), values: &d.params });
+            }
+            for c in &d.chains {
+                let path = format!("{} › {}", d.kind.name(), c.name);
+                if c.id == id {
+                    return Some(ParamOwner { label: path, descs: CHAIN_PARAMS, values: &c.params });
+                }
+                if let Some(x) = c.devices.iter().find(|x| x.id == id) {
+                    return Some(ParamOwner { label: format!("{path} › {}", x.kind.name()), descs: x.kind.params(), values: &x.params });
+                }
+            }
+        }
+        None
+    }
+
+    pub fn param_desc(&self, id: Id, param: usize) -> Option<&'static ParamDesc> {
+        self.param_owner(id).and_then(|o| o.descs.get(param))
+    }
+
+    /// Current value (clamped; default when the stored list is short).
+    pub fn param_value(&self, id: Id, param: usize) -> Option<f32> {
+        self.param_owner(id).and_then(|o| o.value(param))
+    }
+
+    /// "Owner: Parameter" for menus and lane headers.
+    pub fn param_label(&self, id: Id, param: usize) -> Option<String> {
+        let o = self.param_owner(id)?;
+        Some(format!("{}: {}", o.label, o.descs.get(param)?.name))
+    }
+
+    /// Every parameter of the track's devices and chains, for automation and macro menus.
+    pub fn param_targets(&self) -> Vec<(ParamTarget, String)> {
+        let mut out = vec![];
+        let mut push = |id: Id, owner: Option<ParamOwner<'_>>| {
+            if let Some(o) = owner {
+                for (pi, d) in o.descs.iter().enumerate() {
+                    out.push((ParamTarget::Device { device: id, param: pi }, format!("{}: {}", o.label, d.name)));
+                }
+            }
+        };
+        for d in &self.devices {
+            push(d.id, self.param_owner(d.id));
+            for c in &d.chains {
+                push(c.id, self.param_owner(c.id));
+                for x in &c.devices {
+                    push(x.id, self.param_owner(x.id));
+                }
+            }
+        }
+        out
+    }
+
+    /// Writes a parameter (clamped). Returns false when the id or index is unknown.
+    pub fn set_param(&mut self, id: Id, param: usize, v: f32) -> bool {
+        let slot = self.devices.iter_mut().find_map(|d| {
+            if d.id == id {
+                return Some((d.kind.params(), &mut d.params));
+            }
+            d.chains.iter_mut().find_map(|c| {
+                if c.id == id {
+                    return Some((CHAIN_PARAMS, &mut c.params));
+                }
+                c.devices.iter_mut().find(|x| x.id == id).map(|x| (x.kind.params(), &mut x.params))
+            })
+        });
+        let Some((descs, values)) = slot else { return false };
+        let Some(desc) = descs.get(param) else { return false };
+        if values.len() < descs.len() {
+            let have = values.len();
+            values.extend(descs[have..].iter().map(|d| d.default));
+        }
+        values[param] = desc.clamp(v);
+        true
+    }
+
+    pub fn device(&self, id: Id) -> Option<&DeviceState> {
+        self.all_devices().into_iter().find(|d| d.id == id)
+    }
+
+    pub fn device_mut(&mut self, id: Id) -> Option<&mut DeviceState> {
+        for d in self.devices.iter_mut() {
+            if d.id == id {
+                return Some(d);
+            }
+            for c in d.chains.iter_mut() {
+                if let Some(x) = c.devices.iter_mut().find(|x| x.id == id) {
+                    return Some(x);
+                }
+            }
+        }
+        None
+    }
+
+    /// The list holding device `id` (the track's chain or a rack chain) and its index.
+    fn device_list_mut(&mut self, id: Id) -> Option<(&mut Vec<DeviceState>, usize)> {
+        if let Some(i) = self.devices.iter().position(|d| d.id == id) {
+            return Some((&mut self.devices, i));
+        }
+        for d in self.devices.iter_mut() {
+            for c in d.chains.iter_mut() {
+                if let Some(i) = c.devices.iter().position(|x| x.id == id) {
+                    return Some((&mut c.devices, i));
+                }
+            }
+        }
+        None
+    }
+
+    /// Removes automation lanes and macro mappings that point at `ids`.
+    fn forget_params(&mut self, ids: &[Id]) {
+        self.automation.retain(|l| !matches!(l.target, ParamTarget::Device { device, .. } if ids.contains(&device)));
+        for m in self.macros.iter_mut() {
+            m.mappings.retain(|map| !ids.contains(&map.device));
+        }
+    }
+
+    /// Ids of a device and everything inside it (chains, chained devices).
+    fn ids_within(d: &DeviceState) -> Vec<Id> {
+        let mut ids = vec![d.id];
+        for c in &d.chains {
+            ids.push(c.id);
+            ids.extend(c.devices.iter().map(|x| x.id));
+        }
+        ids
+    }
+
+    /// Removes a device (from the track or a rack chain) with its automation and macro mappings.
+    pub fn remove_device(&mut self, id: Id) -> bool {
+        let Some((list, i)) = self.device_list_mut(id) else { return false };
+        let removed = list.remove(i);
+        self.forget_params(&Self::ids_within(&removed));
+        true
+    }
+
+    /// Removes a rack chain with its automation and macro mappings.
+    pub fn remove_chain(&mut self, chain_id: Id) -> bool {
+        let Some((di, ci)) = self.chain_location(chain_id) else { return false };
+        let c = self.devices[di].chains.remove(ci);
+        let mut ids = vec![c.id];
+        ids.extend(c.devices.iter().map(|x| x.id));
+        self.forget_params(&ids);
+        true
+    }
+
+    /// Moves a device one place left or right within its section (spec D1.1).
+    pub fn move_device(&mut self, id: Id, right: bool) -> bool {
+        let Some((list, i)) = self.device_list_mut(id) else { return false };
+        let j = if right { i + 1 } else { i.wrapping_sub(1) };
+        if j >= list.len() || list[j].kind.category() != list[i].kind.category() {
+            return false;
+        }
+        list.swap(i, j);
+        true
+    }
+
+    /// The rack holding chain `chain_id`, and the chain's index in it.
+    pub fn chain_location(&self, chain_id: Id) -> Option<(usize, usize)> {
+        self.devices.iter().enumerate().find_map(|(di, d)| d.chains.iter().position(|c| c.id == chain_id).map(|ci| (di, ci)))
     }
 
     pub fn ensure_macros(&mut self) {
@@ -181,10 +353,6 @@ impl Track {
             self.macros.push(Macro { name: format!("Macro {n}"), value: 0.0, mappings: vec![] });
         }
     }
-}
-
-fn desc_len(kind: DeviceKind) -> usize {
-    kind.params().len()
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -205,6 +373,59 @@ pub struct DeviceState {
     /// Compressor, Gate); `None` = the device's own input.
     #[serde(default)]
     pub sidechain: Option<Id>,
+    /// Chains of an Instrument or Effect Rack (spec D6); empty for other kinds.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chains: Vec<Chain>,
+}
+
+/// One parallel chain of a rack. Its settings are parameters (`CHAIN_PARAMS`)
+/// so they automate and map to macros like device parameters.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Chain {
+    pub id: Id,
+    pub name: String,
+    pub params: Vec<f32>,
+    pub devices: Vec<DeviceState>,
+}
+
+impl Chain {
+    pub fn new(id: Id, name: &str) -> Self {
+        Self { id, name: name.into(), params: CHAIN_PARAMS.iter().map(|p| p.default).collect(), devices: vec![] }
+    }
+
+    pub fn param(&self, i: usize) -> f32 {
+        let desc = &CHAIN_PARAMS[i];
+        desc.clamp(self.params.get(i).copied().unwrap_or(desc.default))
+    }
+}
+
+/// Something with parameters inside a track: a device, a rack chain, or a device inside a chain.
+pub struct ParamOwner<'a> {
+    /// Display name, e.g. "Poly" or "Rack › Bass › Poly".
+    pub label: String,
+    pub descs: &'static [ParamDesc],
+    pub values: &'a [f32],
+}
+
+impl ParamOwner<'_> {
+    pub fn value(&self, i: usize) -> Option<f32> {
+        let d = self.descs.get(i)?;
+        Some(d.clamp(self.values.get(i).copied().unwrap_or(d.default)))
+    }
+}
+
+/// Inserts a device into a chain's section: MIDI effects, then one instrument
+/// (replacing an existing one), then audio effects (spec D1.1).
+fn insert_by_section(devices: &mut Vec<DeviceState>, state: DeviceState) {
+    let midi_fx = devices.iter().take_while(|d| d.kind.is_midi_effect()).count();
+    match state.kind.category() {
+        Category::MidiEffect => devices.insert(midi_fx, state),
+        Category::Instrument => match devices.iter().position(|d| d.kind.is_instrument()) {
+            Some(i) => devices[i] = state,
+            None => devices.insert(midi_fx, state),
+        },
+        Category::AudioEffect => devices.push(state),
+    }
 }
 
 impl DeviceState {
@@ -218,6 +439,7 @@ impl DeviceState {
             pads: if kind == DeviceKind::DrumKit { vec![None; xdaw_dsp::instruments::PADS] } else { vec![] },
             preset_name: None,
             sidechain: None,
+            chains: vec![],
         }
     }
 
@@ -501,6 +723,60 @@ impl Project {
         }
     }
 
+    /// Inserts a copy of track `i` after it with fresh ids for the track, its
+    /// devices, rack chains, clips and take lanes; automation lanes and macro
+    /// mappings follow the renamed devices. Returns the copy's index.
+    pub fn duplicate_track(&mut self, i: usize) -> usize {
+        let mut copy = self.tracks[i].clone();
+        copy.id = self.alloc_id();
+        copy.name = format!("{} copy", copy.name);
+        let mut renamed: Vec<(Id, Id)> = vec![];
+        for d in copy.devices.iter_mut() {
+            let new = self.alloc_id();
+            renamed.push((d.id, new));
+            d.id = new;
+            for c in d.chains.iter_mut() {
+                let new = self.alloc_id();
+                renamed.push((c.id, new));
+                c.id = new;
+                for x in c.devices.iter_mut() {
+                    let new = self.alloc_id();
+                    renamed.push((x.id, new));
+                    x.id = new;
+                }
+            }
+        }
+        let rename = |id: &mut Id| {
+            if let Some(&(_, new)) = renamed.iter().find(|(old, _)| old == id) {
+                *id = new;
+            }
+        };
+        for lane in copy.automation.iter_mut() {
+            if let ParamTarget::Device { device, .. } = &mut lane.target {
+                rename(device);
+            }
+        }
+        for m in copy.macros.iter_mut() {
+            for map in m.mappings.iter_mut() {
+                rename(&mut map.device);
+            }
+        }
+        for c in copy.slots.iter_mut().filter_map(|s| s.clip.as_mut()) {
+            c.id = self.alloc_id();
+        }
+        for a in copy.arrangement.iter_mut() {
+            a.id = self.alloc_id();
+        }
+        for lane in copy.take_lanes.iter_mut() {
+            lane.id = self.alloc_id();
+            for a in lane.clips.iter_mut() {
+                a.id = self.alloc_id();
+            }
+        }
+        self.tracks.insert(i + 1, copy);
+        i + 1
+    }
+
     pub fn add_track(&mut self, kind: TrackKind, name: &str) -> usize {
         let id = self.alloc_id();
         let color = TRACK_COLORS[self.tracks.len() % TRACK_COLORS.len()];
@@ -522,18 +798,32 @@ impl Project {
     pub fn add_device(&mut self, track: TrackRef, kind: DeviceKind) -> Id {
         let id = self.alloc_id();
         let t = self.track_mut(track);
-        let state = DeviceState::new(id, kind);
-        // Sections: MIDI effects, then one instrument (replacing an existing one), then audio effects.
-        let midi_fx = t.devices.iter().take_while(|d| d.kind.is_midi_effect()).count();
-        match kind.category() {
-            Category::MidiEffect => t.devices.insert(midi_fx, state),
-            Category::Instrument => match t.devices.iter().position(|d| d.kind.is_instrument()) {
-                Some(i) => t.devices[i] = state,
-                None => t.devices.insert(midi_fx, state),
-            },
-            Category::AudioEffect => t.devices.push(state),
-        }
+        insert_by_section(&mut t.devices, DeviceState::new(id, kind));
         id
+    }
+
+    /// Adds a chain named after its position to a rack. Returns the chain id.
+    pub fn add_chain(&mut self, track: TrackRef, rack: Id) -> Option<Id> {
+        let id = self.alloc_id();
+        let d = self.track_mut(track).devices.iter_mut().find(|d| d.id == rack && d.kind.is_rack())?;
+        let name = format!("Chain {}", d.chains.len() + 1);
+        d.chains.push(Chain::new(id, &name));
+        Some(id)
+    }
+
+    /// Adds a device to a rack chain, following the chain's section rules (spec D6.2).
+    pub fn add_device_to_chain(&mut self, track: TrackRef, chain: Id, kind: DeviceKind) -> Result<Id, String> {
+        let (di, ci) = self.track(track).chain_location(chain).ok_or("no such chain")?;
+        let rack = self.track(track).devices[di].kind;
+        if kind.is_rack() {
+            return Err("racks cannot contain racks".into());
+        }
+        if rack == DeviceKind::EffectRack && kind.category() != Category::AudioEffect {
+            return Err(format!("{} cannot go in an Effect Rack (audio effects only)", kind.name()));
+        }
+        let id = self.alloc_id();
+        insert_by_section(&mut self.track_mut(track).devices[di].chains[ci].devices, DeviceState::new(id, kind));
+        Ok(id)
     }
 
     pub fn track(&self, r: TrackRef) -> &Track {
@@ -665,6 +955,22 @@ impl Project {
             }
             if t.devices.iter().filter(|d| d.kind.is_instrument()).count() > 1 {
                 issues.push(format!("more than one instrument on '{}'", t.name));
+            }
+            for d in &t.devices {
+                if !d.kind.is_rack() && !d.chains.is_empty() {
+                    issues.push(format!("{} on '{}' has chains but is not a rack", d.kind.name(), t.name));
+                }
+                for c in &d.chains {
+                    if c.devices.iter().any(|x| x.kind.is_rack()) {
+                        issues.push(format!("rack inside a rack on '{}'", t.name));
+                    }
+                    if d.kind == DeviceKind::EffectRack && c.devices.iter().any(|x| x.kind.category() != Category::AudioEffect) {
+                        issues.push(format!("Effect Rack chain '{}' on '{}' holds a non-audio-effect", c.name, t.name));
+                    }
+                    if c.devices.windows(2).any(|w| w[0].kind.category() > w[1].kind.category()) || c.devices.iter().filter(|x| x.kind.is_instrument()).count() > 1 {
+                        issues.push(format!("chain '{}' on '{}' is out of order", c.name, t.name));
+                    }
+                }
             }
         }
         if self.returns.iter().any(|r| !r.mixer.sends_db.is_empty()) {

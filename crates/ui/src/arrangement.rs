@@ -131,28 +131,14 @@ pub fn target_range(p: &Project, r: TrackRef, target: ParamTarget) -> (f32, f32)
     match target {
         ParamTarget::Volume | ParamTarget::Send(_) => (SEND_OFF_DB, 6.0),
         ParamTarget::Pan => (-1.0, 1.0),
-        ParamTarget::Device { device, param } => p
-            .track(r)
-            .devices
-            .iter()
-            .find(|d| d.id == device)
-            .and_then(|d| d.kind.params().get(param))
-            .map(|d| (d.min, d.max))
-            .unwrap_or((0.0, 1.0)),
+        ParamTarget::Device { device, param } => p.track(r).param_desc(device, param).map(|d| (d.min, d.max)).unwrap_or((0.0, 1.0)),
     }
 }
 
 fn target_norm(p: &Project, r: TrackRef, target: ParamTarget, v: f32) -> f32 {
     match target {
         ParamTarget::Volume | ParamTarget::Send(_) => crate::mixer::db_to_fader(v),
-        ParamTarget::Device { device, param } => p
-            .track(r)
-            .devices
-            .iter()
-            .find(|d| d.id == device)
-            .and_then(|d| d.kind.params().get(param))
-            .map(|d| d.to_normalized(v))
-            .unwrap_or(0.0),
+        ParamTarget::Device { device, param } => p.track(r).param_desc(device, param).map(|d| d.to_normalized(v)).unwrap_or(0.0),
         ParamTarget::Pan => {
             let (lo, hi) = target_range(p, r, target);
             (v - lo) / (hi - lo)
@@ -163,14 +149,7 @@ fn target_norm(p: &Project, r: TrackRef, target: ParamTarget, v: f32) -> f32 {
 fn target_from_norm(p: &Project, r: TrackRef, target: ParamTarget, n: f32) -> f32 {
     match target {
         ParamTarget::Volume | ParamTarget::Send(_) => crate::mixer::fader_to_db(n),
-        ParamTarget::Device { device, param } => p
-            .track(r)
-            .devices
-            .iter()
-            .find(|d| d.id == device)
-            .and_then(|d| d.kind.params().get(param))
-            .map(|d| d.from_normalized(n))
-            .unwrap_or(n),
+        ParamTarget::Device { device, param } => p.track(r).param_desc(device, param).map(|d| d.from_normalized(n)).unwrap_or(n),
         ParamTarget::Pan => n * 2.0 - 1.0,
     }
 }
@@ -180,13 +159,7 @@ pub fn target_name(p: &Project, r: TrackRef, target: ParamTarget) -> String {
         ParamTarget::Volume => "Volume".into(),
         ParamTarget::Pan => "Pan".into(),
         ParamTarget::Send(i) => format!("Send {}", (b'A' + i as u8) as char),
-        ParamTarget::Device { device, param } => p
-            .track(r)
-            .devices
-            .iter()
-            .find(|d| d.id == device)
-            .map(|d| format!("{}: {}", d.kind.name(), d.kind.params().get(param).map(|x| x.name).unwrap_or("?")))
-            .unwrap_or_else(|| "Missing device".into()),
+        ParamTarget::Device { device, param } => p.track(r).param_label(device, param).unwrap_or_else(|| "Missing device".into()),
     }
 }
 
@@ -686,11 +659,7 @@ fn track_header(app: &mut XdawApp, ui: &mut Ui, t: usize, rect: Rect) {
     for i in 0..app.project.returns.len() {
         choices.push((Some(ParamTarget::Send(i)), format!("Send {}", (b'A' + i as u8) as char)));
     }
-    for d in &track.devices {
-        for (pi, desc) in d.kind.params().iter().enumerate() {
-            choices.push((Some(ParamTarget::Device { device: d.id, param: pi }), format!("{}: {}", d.kind.name(), desc.name)));
-        }
-    }
+    choices.extend(track.param_targets().into_iter().map(|(t, name)| (Some(t), name)));
     let label = current.map(|c| target_name(&app.project, r, c)).unwrap_or_else(|| "No automation".into());
     let combo_rect = Rect::from_min_size(rect.left_top() + vec2(4.0, 22.0), vec2(HEADER_W - 8.0, 18.0));
     let mut chosen = current;
@@ -1317,7 +1286,7 @@ fn draw_automation(app: &XdawApp, p: &egui::Painter, t: usize, target: ParamTarg
                 ParamTarget::Volume => track.mixer.volume_db,
                 ParamTarget::Pan => track.mixer.pan,
                 ParamTarget::Send(i) => track.mixer.sends_db.get(i).copied().unwrap_or(SEND_OFF_DB),
-                ParamTarget::Device { device, param } => track.devices.iter().find(|d| d.id == device).map(|d| d.param(param)).unwrap_or(0.0),
+                ParamTarget::Device { device, param } => track.param_value(device, param).unwrap_or(0.0),
             };
             p.line_segment([pos2(lane.left(), y(v)), pos2(lane.right(), y(v))], Stroke::new(1.0, Color32::from_rgb(200, 110, 110)));
         }

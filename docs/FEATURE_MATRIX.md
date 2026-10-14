@@ -127,7 +127,7 @@ Platform: macOS 26.6.2, Apple M5, built-in output at 48 kHz. Windows/Linux: **no
 | MIDI effects: Arpeggiator, Chord Stack, Scale Lock, Note Duration, Pitch Randomizer, Velocity Shaper | Own (spec D4) | Verified (unit tests incl. no stuck notes on release/parameter change/AllOff; engine arpeggio timing) | `midi_fx::tests`; live keyboard input not exercised |
 | FM Synth (4 operators, 8 algorithms, feedback) and Morph Synth (4 generated tables, mip-mapped, unison) | Own (spec D5) | Verified (pitch, release, all algorithms finite, table normalisation and band limit) | `synths::tests`; timbre not judged by ear |
 | Parameter smoothing | prompt | Verified | `smoothing_reaches_target_and_bounds_step` |
-| Racks with macros | L10 | Partial (macros only) | `macros_drive_mapped_parameters_in_normalised_space` |
+| Instrument and Effect Racks: parallel chains, volume/pan/mute/solo, key and velocity zones; chained parameters automate and map to macros by id | Own (spec D6) | Verified (DSP, model, sync and render tests; rack UI built by script and seen in screenshot); chain editing by mouse not exercised | `rack::tests`, `instrument_rack_splits_notes_between_chains_by_key_zone`, `automation_reaches_a_device_inside_an_effect_rack`, `rack_edits_send_flat_parameters_and_structure_changes_rebuild`, `duplicating_a_track_renews_ids_inside_racks_and_remaps_macros` |
 
 ## Automation and warping
 

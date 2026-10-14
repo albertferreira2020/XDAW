@@ -24,9 +24,12 @@ Known gaps inside those items:
 ### Devices
 Done (spec `docs/specs/devices.md`): Parametric EQ, Bus Compressor, Saturator, Motion Filter,
 Chorus, Phaser, Gate, Multiband Compressor, FM Synth, Morph Synth; six MIDI effects; sidechain for
-Compressor/Bus Compressor/Gate; Limiter lookahead with automatic delay compensation.
+Compressor/Bus Compressor/Gate; Limiter lookahead with automatic delay compensation; Instrument and
+Effect Racks with parallel chains and key/velocity zones.
 
-9. Racks: instrument, drum and effect racks with parallel chains, key/velocity zones and macros.
+9. Rack chains are not latency-aligned with each other; no MIDI-effect rack; no rack-level macros
+   (the track's macros reach inside racks).
+
 10. Remaining built-in devices: Looper, spectrum analyser, slicing sampler.
 11. Gain-reduction meters on the dynamics devices (values exist in the engine, not shown yet).
 12. Compensation of device latency on return tracks.

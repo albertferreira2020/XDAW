@@ -162,27 +162,7 @@ pub fn track_header(app: &mut XdawApp, ui: &mut Ui, r: TrackRef) {
         ui.menu_button("Color", |ui| color_menu(ui, &mut app.project.track_mut(r).color));
         if let TrackRef::Track(i) = r {
             if ui.button("Duplicate Track").clicked() {
-                let mut copy = app.project.tracks[i].clone();
-                copy.id = app.project.alloc_id();
-                copy.name = format!("{} copy", copy.name);
-                for d in copy.devices.iter_mut() {
-                    let old = d.id;
-                    d.id = app.project.alloc_id();
-                    for lane in copy.automation.iter_mut() {
-                        if let ParamTarget::Device { device, .. } = &mut lane.target {
-                            if *device == old {
-                                *device = d.id;
-                            }
-                        }
-                    }
-                }
-                for s in copy.slots.iter_mut().filter_map(|s| s.clip.as_mut()) {
-                    s.id = app.project.alloc_id();
-                }
-                for a in copy.arrangement.iter_mut() {
-                    a.id = app.project.alloc_id();
-                }
-                app.project.tracks.insert(i + 1, copy);
+                app.project.duplicate_track(i);
                 app.label("Duplicate Track");
                 ui.close();
             }
