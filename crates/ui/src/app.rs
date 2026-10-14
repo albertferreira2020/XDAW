@@ -84,6 +84,8 @@ pub struct XdawApp {
     pub rt: AudioRuntime,
     pub view: View,
     pub detail: Detail,
+    /// Height of the Clip/Devices panel last frame (script `panel`).
+    pub detail_h: f32,
     pub sel: Selection,
     pub status_line: String,
     pub arr: arrangement::ArrangementState,
@@ -134,6 +136,7 @@ impl XdawApp {
             rt: AudioRuntime::new(AudioSettings::default()),
             view: View::Session,
             detail: Detail::Devices,
+            detail_h: 0.0,
             sel: Selection::default(),
             status_line: String::new(),
             arr: arrangement::ArrangementState::default(),
@@ -1321,24 +1324,26 @@ impl eframe::App for XdawApp {
         transport::show(self, ui);
         egui::Panel::bottom("status").exact_size(22.0).show(ui, |ui| transport::status_bar(self, ui));
         egui::Panel::left("browser").resizable(true).default_size(210.0).min_size(140.0).show(ui, |ui| browser::show(self, ui));
-        egui::Panel::bottom("detail").resizable(true).default_size(260.0).min_size(120.0).show(ui, |ui| {
+        let detail = egui::Panel::bottom("detail").resizable(true).default_size(260.0).min_size(120.0).show(ui, |ui| {
             ui.horizontal(|ui| {
                 ui.selectable_value(&mut self.detail, Detail::Clip, "Clip");
                 ui.selectable_value(&mut self.detail, Detail::Devices, "Devices");
             });
             ui.separator();
-            // Content is laid out in a fixed rect so it can never push the panel
-            // taller than the size the user dragged it to.
+            // The panel's height is set only by the user's drag. Content goes in a
+            // child Ui that does not report its size back to the panel (unlike a
+            // scope), so content that overflows by a few pixels is clipped instead
+            // of growing the panel a little more every frame.
             let rect = ui.available_rect_before_wrap();
-            ui.scope_builder(egui::UiBuilder::new().max_rect(rect), |ui| {
-                ui.set_clip_rect(ui.clip_rect().intersect(rect));
-                match self.detail {
-                    Detail::Clip => clip_editor::show(self, ui),
-                    Detail::Devices => devices::show(self, ui),
-                }
-            });
+            let mut content = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+            content.set_clip_rect(ui.clip_rect().intersect(rect));
+            match self.detail {
+                Detail::Clip => clip_editor::show(self, &mut content),
+                Detail::Devices => devices::show(self, &mut content),
+            }
             ui.allocate_rect(rect, egui::Sense::hover());
         });
+        self.detail_h = detail.response.rect.height();
         egui::CentralPanel::default().show(ui, |ui| match self.view {
             View::Session => session::show(self, ui),
             View::Arrangement => arrangement::show(self, ui),

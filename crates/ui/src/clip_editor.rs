@@ -466,7 +466,7 @@ fn piano_roll(app: &mut XdawApp, ui: &mut Ui, loc: ClipLoc) {
             }
             ui.label(egui::RichText::new("double-click: add/delete · drag: move · edge: resize · shift: fine/extend").size(10.0).color(theme::TEXT_DIM));
         });
-        let avail = ui.available_size() - vec2(0.0, timeline::SCROLLBAR_H + 2.0);
+        let avail = ui.available_size() - vec2(0.0, timeline::SCROLLBAR_H + ui.spacing().item_spacing.y);
         let (rect, resp) = ui.allocate_exact_size(avail.max(vec2(100.0, 80.0)), Sense::click_and_drag());
         let vel_h = 44.0;
         let keys = Rect::from_min_size(rect.min, vec2(40.0, rect.height() - vel_h));
@@ -803,7 +803,7 @@ fn audio_view_inner(app: &mut XdawApp, ui: &mut Ui, clip: &Clip, a: &AudioConten
             ui.label(egui::RichText::new("pinch/Cmd+wheel: zoom · double-click: warp marker · drag: S/L/E").size(10.0).color(theme::TEXT_DIM));
         }
     });
-    let avail = ui.available_size() - vec2(0.0, timeline::SCROLLBAR_H + 2.0);
+    let avail = ui.available_size() - vec2(0.0, timeline::SCROLLBAR_H + ui.spacing().item_spacing.y);
     let (rect, resp) = ui.allocate_exact_size(avail.max(vec2(100.0, 40.0)), Sense::click_and_drag());
     let p = ui.painter_at(rect);
     p.rect_filled(rect, 0.0, theme::PANEL_DARK);

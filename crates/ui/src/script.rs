@@ -243,6 +243,7 @@ impl Script {
                     }
                 }
                 "view" => app.view = if args.first() == Some(&"arrangement") { View::Arrangement } else { View::Session },
+                "panel" => println!("[script] panel detail_h={:.1}", app.detail_h),
                 "detail" => app.detail = if args.first() == Some(&"clip") { Detail::Clip } else { Detail::Devices },
                 "scene" => crate::session::launch_scene(app, (num(0) as usize).saturating_sub(1)),
                 "launch" => {

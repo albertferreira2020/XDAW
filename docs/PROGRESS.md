@@ -126,3 +126,14 @@ Repository: `~/Documents/XDAW` (local git, branch `main`, no remote yet). REA li
 - Guard test `crates/project/tests/clean_room.rs` fails on third-party product, manual or file-format
   references in code, specs, scripts and README. Tests: 135 pass.
 - Not done: legal review (needs a lawyer); git history is intentionally not rewritten.
+
+## Detail panel growth, second cause (2026-10-13)
+- Reproduced with a real click on an audio clip (script `click` + new `panel` probe): height went
+  260 → 267 → 286 → 317 → 378 → 411 px over ~2 s. Selecting through the script did not reproduce it
+  because slot 1/1 is empty.
+- Root cause: the wave and piano editors reserved `SCROLLBAR_H + 2` px below the canvas, but egui adds
+  `item_spacing.y` before the scroll bar, so content overflowed by a few px; the content `scope` reported
+  that to the panel, which grew every frame.
+- Fix: content lives in a `new_child` Ui (its size never feeds the panel); editors subtract
+  `item_spacing.y`. Verified: audio clip, MIDI clip, Devices and Arrangement stay at 260; dragging the
+  edge to 394 and 174 px holds.
