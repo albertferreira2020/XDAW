@@ -108,10 +108,14 @@ pub fn new_track_for_file(app: &mut XdawApp, p: &std::path::Path) -> usize {
 pub fn create_track_from(app: &mut XdawApp, item: BrowserItem) {
     match item {
         BrowserItem::Device(k) => {
-            let kind = if k.is_instrument() { TrackKind::Midi } else { TrackKind::Audio };
+            let kind = if k.needs_midi_track() { TrackKind::Midi } else { TrackKind::Audio };
             let n = app.project.tracks.len() + 1;
             let t = app.project.add_track(kind, &format!("{n} {}", k.name()));
             app.project.add_device(TrackRef::Track(t), k);
+            if k.is_midi_effect() {
+                // A MIDI effect alone makes no sound: give it the default instrument.
+                app.project.add_device(TrackRef::Track(t), xdaw_dsp::DeviceKind::PolySynth);
+            }
             app.label("Create Track");
         }
         BrowserItem::File(p) => {

@@ -1,93 +1,175 @@
-//! Device kinds and enum dispatch (no trait objects on the audio thread).
+//! Device kinds and enum dispatch. Devices live in an enum (no boxed trait
+//! objects); calls go through `&mut dyn Processor` borrowed from it.
+//!
+//! Every device is listed once in `devices!` below; the macro generates
+//! `DeviceKind`, `Device` and their dispatch. Each device type implements
+//! `Processor`. Chain rules: docs/specs/devices.md D1.
 
+use crate::dynamics::*;
 use crate::effects::*;
 use crate::instruments::*;
+use crate::midi_fx::*;
+use crate::modulation::*;
 use crate::params::{Ctx, NoteEvent, ParamDesc};
+use crate::synths::*;
+use crate::tone::*;
 use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum DeviceKind {
-    PolySynth,
-    Sampler,
-    /// Projects written before 2026-10-13 store this kind under its former name (alias below).
-    #[serde(alias = "DrumRack")]
-    DrumKit,
-    Gain,
-    Eq3,
-    Filter,
-    Compressor,
-    Limiter,
-    Delay,
-    Reverb,
+/// Where a device sits in a chain (spec D1.1).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Category {
+    MidiEffect,
+    Instrument,
+    AudioEffect,
 }
 
-impl DeviceKind {
-    pub const ALL: [DeviceKind; 10] = [
-        DeviceKind::PolySynth,
-        DeviceKind::Sampler,
-        DeviceKind::DrumKit,
-        DeviceKind::Gain,
-        DeviceKind::Eq3,
-        DeviceKind::Filter,
-        DeviceKind::Compressor,
-        DeviceKind::Limiter,
-        DeviceKind::Delay,
-        DeviceKind::Reverb,
-    ];
-
-    pub fn name(self) -> &'static str {
+impl Category {
+    pub fn label(self) -> &'static str {
         match self {
-            DeviceKind::PolySynth => "Poly",
-            DeviceKind::Sampler => "Sampler",
-            DeviceKind::DrumKit => "Drum Kit",
-            DeviceKind::Gain => "Utility",
-            DeviceKind::Eq3 => "EQ Three-Band",
-            DeviceKind::Filter => "Filter",
-            DeviceKind::Compressor => "Compressor",
-            DeviceKind::Limiter => "Limiter",
-            DeviceKind::Delay => "Echo Delay",
-            DeviceKind::Reverb => "Room Reverb",
+            Category::MidiEffect => "MIDI Effects",
+            Category::Instrument => "Instruments",
+            Category::AudioEffect => "Audio Effects",
         }
     }
+}
 
-    pub fn is_instrument(self) -> bool {
-        matches!(self, DeviceKind::PolySynth | DeviceKind::Sampler | DeviceKind::DrumKit)
+/// Audio buffers and input events of one processing call.
+pub struct Io<'a> {
+    pub events: &'a [NoteEvent],
+    pub l: &'a mut [f32],
+    pub r: &'a mut [f32],
+    /// Detector input from another track (post-devices, pre-fader), if routed.
+    pub sidechain: Option<(&'a [f32], &'a [f32])>,
+}
+
+/// Implemented by every device type. Instruments add to `io.l`/`io.r`, audio
+/// effects transform them in place, MIDI effects implement `process_midi`.
+pub trait Processor {
+    fn set_param(&mut self, i: usize, v: f32);
+    fn param_values(&self) -> &[f32];
+    fn process(&mut self, _io: Io, _ctx: &Ctx) {}
+    /// Transforms `input` (events of an `n`-sample block) into `out`; `out` is
+    /// empty and has the same capacity as `input`'s buffer. Must never push past
+    /// the capacity.
+    fn process_midi(&mut self, input: &[NoteEvent], out: &mut Vec<NoteEvent>, _n: usize, _ctx: &Ctx) {
+        push_all(out, input);
     }
-
-    pub fn params(self) -> &'static [ParamDesc] {
-        match self {
-            DeviceKind::PolySynth => SYNTH_PARAMS,
-            DeviceKind::Sampler => SAMPLER_PARAMS,
-            DeviceKind::DrumKit => DRUM_PARAMS,
-            DeviceKind::Gain => GAIN_PARAMS,
-            DeviceKind::Eq3 => EQ_PARAMS,
-            DeviceKind::Filter => FILTER_PARAMS,
-            DeviceKind::Compressor => COMP_PARAMS,
-            DeviceKind::Limiter => LIMITER_PARAMS,
-            DeviceKind::Delay => DELAY_PARAMS,
-            DeviceKind::Reverb => REVERB_PARAMS,
-        }
+    fn gain_reduction_db(&self) -> f32 {
+        0.0
     }
-
-    /// Samples of latency introduced; all built-in devices are zero-latency.
-    /// The mixer compensates non-zero values (plugin hosting) per track.
-    pub fn latency_samples(self) -> usize {
+    /// Samples of latency this device adds with its current parameters.
+    fn latency_samples(&self) -> usize {
         0
     }
 }
 
-pub enum Device {
-    PolySynth(Box<Synth>),
-    Sampler(Box<Sampler>),
-    DrumKit(Box<DrumKit>),
-    Gain(Box<GainFx>),
-    Eq3(Box<Eq3>),
-    Filter(Box<FilterFx>),
-    Compressor(Box<Compressor>),
-    Limiter(Box<Limiter>),
-    Delay(Box<Delay>),
-    Reverb(Box<Reverb>),
+/// Pushes as many events as capacity allows (never reallocates).
+pub fn push_all(out: &mut Vec<NoteEvent>, events: &[NoteEvent]) {
+    let room = out.capacity() - out.len();
+    out.extend_from_slice(&events[..events.len().min(room)]);
+}
+
+macro_rules! devices {
+    ($( $(#[$m:meta])* $kind:ident($ty:ty) = $name:literal, $params:ident, $cat:ident, |$sr:ident, $media:ident| $ctor:expr; )*) => {
+        #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+        pub enum DeviceKind {
+            $( $(#[$m])* $kind, )*
+        }
+
+        impl DeviceKind {
+            pub const ALL: &'static [DeviceKind] = &[$(DeviceKind::$kind),*];
+
+            pub fn name(self) -> &'static str {
+                match self { $(DeviceKind::$kind => $name,)* }
+            }
+
+            pub fn params(self) -> &'static [ParamDesc] {
+                match self { $(DeviceKind::$kind => $params,)* }
+            }
+
+            pub fn category(self) -> Category {
+                match self { $(DeviceKind::$kind => Category::$cat,)* }
+            }
+        }
+
+        pub enum Device {
+            $( $kind(Box<$ty>), )*
+        }
+
+        impl Device {
+            /// Allocates; call off the audio thread.
+            pub fn new(kind: DeviceKind, sr: f32, media: DeviceMedia) -> Self {
+                #[allow(unused_variables)]
+                match kind {
+                    $(DeviceKind::$kind => { let ($sr, $media) = (sr, media); Device::$kind(Box::new($ctor)) })*
+                }
+            }
+
+            pub fn kind(&self) -> DeviceKind {
+                match self { $(Device::$kind(_) => DeviceKind::$kind,)* }
+            }
+
+            fn processor(&mut self) -> &mut dyn Processor {
+                match self { $(Device::$kind(d) => &mut **d,)* }
+            }
+
+            fn processor_ref(&self) -> &dyn Processor {
+                match self { $(Device::$kind(d) => &**d,)* }
+            }
+        }
+    };
+}
+
+devices! {
+    PolySynth(Synth) = "Poly", SYNTH_PARAMS, Instrument, |sr, m| Synth::new(sr);
+    Sampler(Sampler) = "Sampler", SAMPLER_PARAMS, Instrument, |sr, m| Sampler::new(sr, m.sample);
+    /// Projects written before 2026-10-13 store this kind under its former name (alias below).
+    #[serde(alias = "DrumRack")]
+    DrumKit(DrumKit) = "Drum Kit", DRUM_PARAMS, Instrument, |sr, m| DrumKit::new(sr, m.pads);
+    FmSynth(FmSynth) = "FM Synth", FM_PARAMS, Instrument, |sr, m| FmSynth::new(sr);
+    MorphSynth(MorphSynth) = "Morph Synth", MORPH_PARAMS, Instrument, |sr, m| MorphSynth::new(sr);
+    Gain(GainFx) = "Utility", GAIN_PARAMS, AudioEffect, |sr, m| GainFx::new(sr);
+    Eq3(Eq3) = "EQ Three-Band", EQ_PARAMS, AudioEffect, |sr, m| Eq3::new(sr);
+    ParamEq(ParamEq) = "Parametric EQ", PEQ_PARAMS, AudioEffect, |sr, m| ParamEq::new(sr);
+    Filter(FilterFx) = "Filter", FILTER_PARAMS, AudioEffect, |sr, m| FilterFx::new(sr);
+    MotionFilter(MotionFilter) = "Motion Filter", MOTION_PARAMS, AudioEffect, |sr, m| MotionFilter::new(sr);
+    Compressor(Compressor) = "Compressor", COMP_PARAMS, AudioEffect, |sr, m| Compressor::new(sr);
+    BusComp(BusComp) = "Bus Compressor", BUS_PARAMS, AudioEffect, |sr, m| BusComp::new(sr);
+    Multiband(Multiband) = "Multiband Compressor", MB_PARAMS, AudioEffect, |sr, m| Multiband::new(sr);
+    Gate(Gate) = "Gate", GATE_PARAMS, AudioEffect, |sr, m| Gate::new(sr);
+    Limiter(Limiter) = "Limiter", LIMITER_PARAMS, AudioEffect, |sr, m| Limiter::new(sr);
+    Saturator(Saturator) = "Saturator", SAT_PARAMS, AudioEffect, |sr, m| Saturator::new(sr);
+    Chorus(Chorus) = "Chorus", CHORUS_PARAMS, AudioEffect, |sr, m| Chorus::new(sr);
+    Phaser(Phaser) = "Phaser", PHASER_PARAMS, AudioEffect, |sr, m| Phaser::new(sr);
+    Delay(Delay) = "Echo Delay", DELAY_PARAMS, AudioEffect, |sr, m| Delay::new(sr);
+    Reverb(Reverb) = "Room Reverb", REVERB_PARAMS, AudioEffect, |sr, m| Reverb::new(sr);
+    Arpeggiator(Arpeggiator) = "Arpeggiator", ARP_PARAMS, MidiEffect, |sr, m| Arpeggiator::new(sr);
+    ChordStack(ChordStack) = "Chord Stack", CHORD_PARAMS, MidiEffect, |sr, m| ChordStack::new();
+    ScaleLock(ScaleLock) = "Scale Lock", SCALE_PARAMS, MidiEffect, |sr, m| ScaleLock::new();
+    NoteDuration(NoteDuration) = "Note Duration", DURATION_PARAMS, MidiEffect, |sr, m| NoteDuration::new(sr);
+    PitchRandom(PitchRandom) = "Pitch Randomizer", RANDOM_PARAMS, MidiEffect, |sr, m| PitchRandom::new();
+    VelocityShaper(VelocityShaper) = "Velocity Shaper", VELOCITY_PARAMS, MidiEffect, |sr, m| VelocityShaper::new();
+}
+
+impl DeviceKind {
+    pub fn is_instrument(self) -> bool {
+        self.category() == Category::Instrument
+    }
+
+    pub fn is_midi_effect(self) -> bool {
+        self.category() == Category::MidiEffect
+    }
+
+    /// MIDI effects and instruments only make sense on MIDI tracks.
+    pub fn needs_midi_track(self) -> bool {
+        self.category() != Category::AudioEffect
+    }
+
+    /// Kinds whose detector can listen to another track (spec D3.1).
+    pub fn supports_sidechain(self) -> bool {
+        matches!(self, DeviceKind::Compressor | DeviceKind::BusComp | DeviceKind::Gate)
+    }
 }
 
 /// Media a device needs at construction (sampler and drum kit).
@@ -98,65 +180,12 @@ pub struct DeviceMedia {
 }
 
 impl Device {
-    /// Allocates; call off the audio thread.
-    pub fn new(kind: DeviceKind, sr: f32, media: DeviceMedia) -> Self {
-        match kind {
-            DeviceKind::PolySynth => Device::PolySynth(Box::new(Synth::new(sr))),
-            DeviceKind::Sampler => Device::Sampler(Box::new(Sampler::new(sr, media.sample))),
-            DeviceKind::DrumKit => Device::DrumKit(Box::new(DrumKit::new(sr, media.pads))),
-            DeviceKind::Gain => Device::Gain(Box::new(GainFx::new(sr))),
-            DeviceKind::Eq3 => Device::Eq3(Box::new(Eq3::new(sr))),
-            DeviceKind::Filter => Device::Filter(Box::new(FilterFx::new(sr))),
-            DeviceKind::Compressor => Device::Compressor(Box::new(Compressor::new(sr))),
-            DeviceKind::Limiter => Device::Limiter(Box::new(Limiter::new(sr))),
-            DeviceKind::Delay => Device::Delay(Box::new(Delay::new(sr))),
-            DeviceKind::Reverb => Device::Reverb(Box::new(Reverb::new(sr))),
-        }
-    }
-
-    pub fn kind(&self) -> DeviceKind {
-        match self {
-            Device::PolySynth(_) => DeviceKind::PolySynth,
-            Device::Sampler(_) => DeviceKind::Sampler,
-            Device::DrumKit(_) => DeviceKind::DrumKit,
-            Device::Gain(_) => DeviceKind::Gain,
-            Device::Eq3(_) => DeviceKind::Eq3,
-            Device::Filter(_) => DeviceKind::Filter,
-            Device::Compressor(_) => DeviceKind::Compressor,
-            Device::Limiter(_) => DeviceKind::Limiter,
-            Device::Delay(_) => DeviceKind::Delay,
-            Device::Reverb(_) => DeviceKind::Reverb,
-        }
-    }
-
     pub fn set_param(&mut self, i: usize, v: f32) {
-        match self {
-            Device::PolySynth(d) => d.set_param(i, v),
-            Device::Sampler(d) => d.set_param(i, v),
-            Device::DrumKit(d) => d.set_param(i, v),
-            Device::Gain(d) => d.set_param(i, v),
-            Device::Eq3(d) => d.set_param(i, v),
-            Device::Filter(d) => d.set_param(i, v),
-            Device::Compressor(d) => d.set_param(i, v),
-            Device::Limiter(d) => d.set_param(i, v),
-            Device::Delay(d) => d.set_param(i, v),
-            Device::Reverb(d) => d.set_param(i, v),
-        }
+        self.processor().set_param(i, v);
     }
 
     pub fn param_values(&self) -> &[f32] {
-        match self {
-            Device::PolySynth(d) => d.param_values(),
-            Device::Sampler(d) => d.param_values(),
-            Device::DrumKit(d) => d.param_values(),
-            Device::Gain(d) => d.param_values(),
-            Device::Eq3(d) => d.param_values(),
-            Device::Filter(d) => d.param_values(),
-            Device::Compressor(d) => d.param_values(),
-            Device::Limiter(d) => d.param_values(),
-            Device::Delay(d) => d.param_values(),
-            Device::Reverb(d) => d.param_values(),
-        }
+        self.processor_ref().param_values()
     }
 
     /// Applies every parameter of `other` (same kind) to self; no allocation.
@@ -171,20 +200,21 @@ impl Device {
         }
     }
 
-    /// Instruments add their output to `l`/`r`; effects transform `l`/`r` in place.
-    pub fn process(&mut self, events: &[NoteEvent], l: &mut [f32], r: &mut [f32], ctx: &Ctx) {
-        match self {
-            Device::PolySynth(d) => d.render(events, l, r, ctx),
-            Device::Sampler(d) => d.render(events, l, r, ctx),
-            Device::DrumKit(d) => d.render(events, l, r, ctx),
-            Device::Gain(d) => d.process(l, r),
-            Device::Eq3(d) => d.process(l, r),
-            Device::Filter(d) => d.process(l, r),
-            Device::Compressor(d) => d.process(l, r),
-            Device::Limiter(d) => d.process(l, r),
-            Device::Delay(d) => d.process(l, r, ctx),
-            Device::Reverb(d) => d.process(l, r, ctx),
-        }
+    /// Instruments add their output to `io.l`/`io.r`; audio effects transform them in place.
+    pub fn process(&mut self, io: Io, ctx: &Ctx) {
+        self.processor().process(io, ctx);
+    }
+
+    pub fn process_midi(&mut self, input: &[NoteEvent], out: &mut Vec<NoteEvent>, n: usize, ctx: &Ctx) {
+        self.processor().process_midi(input, out, n, ctx);
+    }
+
+    pub fn gain_reduction_db(&self) -> f32 {
+        self.processor_ref().gain_reduction_db()
+    }
+
+    pub fn latency_samples(&self) -> usize {
+        self.processor_ref().latency_samples()
     }
 
     /// Moves media from `other` into self (used when a rebuilt graph keeps a
@@ -206,12 +236,37 @@ impl Device {
             _ => {}
         }
     }
-
-    pub fn gain_reduction_db(&self) -> f32 {
-        match self {
-            Device::Compressor(c) => c.gain_reduction_db,
-            Device::Limiter(c) => c.gain_reduction_db,
-            _ => 0.0,
-        }
-    }
 }
+
+/// Implements `Processor` for a device type with inherent `set_param`,
+/// `param_values` and a processing method adapted by `$body`.
+macro_rules! processor {
+    ($ty:ty, |$s:ident, $io:ident, $ctx:ident| $body:expr $(, gr = $gr:ident)?) => {
+        impl Processor for $ty {
+            fn set_param(&mut self, i: usize, v: f32) {
+                <$ty>::set_param(self, i, v)
+            }
+            fn param_values(&self) -> &[f32] {
+                <$ty>::param_values(self)
+            }
+            #[allow(unused_variables)]
+            fn process(&mut self, $io: Io, $ctx: &Ctx) {
+                let $s = self;
+                $body
+            }
+            $(fn gain_reduction_db(&self) -> f32 {
+                self.$gr
+            })?
+        }
+    };
+}
+pub(crate) use processor;
+
+processor!(Synth, |s, io, ctx| s.render(io.events, io.l, io.r, ctx));
+processor!(Sampler, |s, io, ctx| s.render(io.events, io.l, io.r, ctx));
+processor!(DrumKit, |s, io, ctx| s.render(io.events, io.l, io.r, ctx));
+processor!(GainFx, |s, io, ctx| s.process(io.l, io.r));
+processor!(Eq3, |s, io, ctx| s.process(io.l, io.r));
+processor!(FilterFx, |s, io, ctx| s.process(io.l, io.r));
+processor!(Delay, |s, io, ctx| s.process(io.l, io.r, ctx));
+processor!(Reverb, |s, io, ctx| s.process(io.l, io.r, ctx));

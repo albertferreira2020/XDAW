@@ -197,6 +197,20 @@ impl FilterFx {
 
 // ---------------------------------------------------------------- Compressor
 
+/// Gain reduction (dB, positive) of a soft-knee compressor curve for an input
+/// level `x_db`, threshold `t`, `ratio` and knee width `knee` (all dB).
+pub fn comp_curve(x_db: f32, t: f32, ratio: f32, knee: f32) -> f32 {
+    let over = x_db - t;
+    let slope = 1.0 - 1.0 / ratio.max(1.0);
+    if 2.0 * over < -knee {
+        0.0
+    } else if knee > 0.0 && 2.0 * over.abs() <= knee {
+        slope * (over + knee / 2.0).powi(2) / (2.0 * knee)
+    } else {
+        slope * over
+    }
+}
+
 pub const COMP_PARAMS: &[ParamDesc] = &[
     ParamDesc::lin("threshold", "Threshold", -60.0, 0.0, -18.0, "dB"),
     ParamDesc::lin("ratio", "Ratio", 1.0, 20.0, 4.0, ":1"),
@@ -245,22 +259,22 @@ impl Compressor {
 
     /// Static curve: gain reduction in dB for an input level in dB.
     pub fn curve(&self, x_db: f32) -> f32 {
-        let (t, ratio, knee) = (self.params[0], self.params[1], self.params[4]);
-        let over = x_db - t;
-        let slope = 1.0 - 1.0 / ratio;
-        if 2.0 * over < -knee {
-            0.0
-        } else if knee > 0.0 && 2.0 * over.abs() <= knee {
-            slope * (over + knee / 2.0).powi(2) / (2.0 * knee)
-        } else {
-            slope * over
-        }
+        comp_curve(x_db, self.params[0], self.params[1], self.params[4])
     }
 
     pub fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
+        self.process_sc(l, r, None);
+    }
+
+    /// Compresses `l`/`r`; the detector listens to `detector` when given (sidechain).
+    pub fn process_sc(&mut self, l: &mut [f32], r: &mut [f32], detector: Option<(&[f32], &[f32])>) {
         let mut max_gr: f32 = 0.0;
         for i in 0..l.len() {
-            let peak = l[i].abs().max(r[i].abs()).max(1e-6);
+            let (dl, dr) = match detector {
+                Some((a, b)) => (a.get(i).copied().unwrap_or(0.0), b.get(i).copied().unwrap_or(0.0)),
+                None => (l[i], r[i]),
+            };
+            let peak = dl.abs().max(dr.abs()).max(1e-6);
             let target = self.curve(20.0 * peak.log10());
             let coef = if target > self.env_db { self.attack } else { self.release };
             self.env_db = target + coef * (self.env_db - target);
@@ -526,22 +540,38 @@ impl Reverb {
 
 // ---------------------------------------------------------------- Limiter
 
+pub const LIMITER_LOOKAHEAD: &[&str] = &["Off", "1.5 ms", "3 ms", "6 ms"];
+const LOOKAHEAD_MS: [f32; 4] = [0.0, 1.5, 3.0, 6.0];
+
 pub const LIMITER_PARAMS: &[ParamDesc] = &[
     ParamDesc::lin("gain", "Gain", 0.0, 24.0, 0.0, "dB"),
     ParamDesc::lin("ceiling", "Ceiling", -12.0, 0.0, -0.3, "dB"),
     ParamDesc::log("release", "Release", 5.0, 1_000.0, 100.0, "ms"),
+    ParamDesc::choice("lookahead", "Lookahead", LIMITER_LOOKAHEAD, 0.0),
 ];
 
-/// Zero-latency brickwall limiter: the gain drops instantly to whatever keeps the
-/// stereo-linked peak at the ceiling and recovers with an exponential release, so
-/// the output never exceeds the ceiling (it trades lookahead for no added latency).
+/// Brickwall limiter; the stereo-linked output never exceeds the ceiling.
+///
+/// Without lookahead the gain drops instantly at a peak (no latency). With a
+/// lookahead of L samples (spec D3.2) the audio is delayed by L; the gain is the
+/// running mean over L+1 samples of the running minimum over L+1 samples of the
+/// required gain. Every value in that mean is a minimum over a window holding
+/// the sample being output, so the gain never exceeds what that sample needs,
+/// and it ramps linearly into the peak instead of jumping.
 pub struct Limiter {
-    params: [f32; 3],
+    params: [f32; 4],
     drive: Smoothed,
     ceiling: f32,
     release: f32,
     env: f32,
     sr: f32,
+    /// Lookahead in samples (0 = off).
+    la: usize,
+    audio: [Vec<f32>; 2],
+    required: Vec<f32>,
+    minima: Vec<f32>,
+    sum: f64,
+    j: usize,
     /// Largest gain reduction in dB (positive) over the last block, for metering.
     pub gain_reduction_db: f32,
 }
@@ -553,7 +583,22 @@ impl Limiter {
 
     pub fn new(sr: f32) -> Self {
         let params = std::array::from_fn(|i| LIMITER_PARAMS[i].default);
-        let mut l = Self { params, drive: Smoothed::new(1.0, sr, 20.0), ceiling: 1.0, release: 0.0, env: 1.0, sr, gain_reduction_db: 0.0 };
+        let max = (LOOKAHEAD_MS[3] * 0.001 * sr).ceil() as usize + 2;
+        let mut l = Self {
+            params,
+            drive: Smoothed::new(1.0, sr, 20.0),
+            ceiling: 1.0,
+            release: 0.0,
+            env: 1.0,
+            sr,
+            la: 0,
+            audio: [vec![0.0; max], vec![0.0; max]],
+            required: vec![1.0; max],
+            minima: vec![1.0; max],
+            sum: 0.0,
+            j: 0,
+            gain_reduction_db: 0.0,
+        };
         l.update();
         l.drive.set_target(db_to_gain(l.params[0]));
         l
@@ -563,6 +608,17 @@ impl Limiter {
         self.drive.set_target(db_to_gain(self.params[0]));
         self.ceiling = db_to_gain(self.params[1]);
         self.release = (-1.0 / (self.params[2] * 0.001 * self.sr)).exp();
+        let la = (LOOKAHEAD_MS[self.params[3] as usize] * 0.001 * self.sr).round() as usize;
+        if la != self.la {
+            self.la = la.min(self.audio[0].len() - 2);
+            for b in self.audio.iter_mut() {
+                b.fill(0.0);
+            }
+            self.required.fill(1.0);
+            self.minima.fill(1.0);
+            self.sum = (self.la + 1) as f64;
+            self.j = 0;
+        }
     }
 
     pub fn set_param(&mut self, i: usize, v: f32) {
@@ -572,24 +628,78 @@ impl Limiter {
         }
     }
 
+    pub fn latency_samples(&self) -> usize {
+        self.la
+    }
+
     pub fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
         let mut min_gain: f32 = 1.0;
+        let la = self.la;
+        let w = la + 1;
         for i in 0..l.len() {
             let d = self.drive.next();
             let (x, y) = (l[i] * d, r[i] * d);
             let peak = x.abs().max(y.abs());
             let needed = if peak > self.ceiling { self.ceiling / peak } else { 1.0 };
-            // Instant attack, exponential release back towards unity.
+            let (gain, ox, oy) = if la == 0 {
+                (needed, x, y)
+            } else {
+                let slot = self.j % w;
+                self.required[slot] = needed;
+                let m = self.required[..w].iter().copied().fold(1.0f32, f32::min);
+                self.sum += (m - self.minima[slot]) as f64;
+                self.minima[slot] = m;
+                let a = self.j % la;
+                let (ox, oy) = (self.audio[0][a], self.audio[1][a]);
+                self.audio[0][a] = x;
+                self.audio[1][a] = y;
+                self.j = (self.j + 1) % (w * la);
+                ((self.sum / w as f64) as f32, ox, oy)
+            };
+            // Release: recover exponentially towards unity, never above `gain`.
             let released = 1.0 + self.release * (self.env - 1.0);
-            self.env = needed.min(released);
+            self.env = gain.min(released);
             if !self.env.is_finite() {
                 self.env = 1.0;
             }
             min_gain = min_gain.min(self.env);
-            l[i] = x * self.env;
-            r[i] = y * self.env;
+            l[i] = ox * self.env;
+            r[i] = oy * self.env;
         }
         self.gain_reduction_db = -20.0 * min_gain.max(1e-6).log10();
+    }
+}
+
+impl crate::device::Processor for Compressor {
+    fn set_param(&mut self, i: usize, v: f32) {
+        Compressor::set_param(self, i, v)
+    }
+    fn param_values(&self) -> &[f32] {
+        Compressor::param_values(self)
+    }
+    fn process(&mut self, io: crate::device::Io, _ctx: &Ctx) {
+        self.process_sc(io.l, io.r, io.sidechain)
+    }
+    fn gain_reduction_db(&self) -> f32 {
+        self.gain_reduction_db
+    }
+}
+
+impl crate::device::Processor for Limiter {
+    fn set_param(&mut self, i: usize, v: f32) {
+        Limiter::set_param(self, i, v)
+    }
+    fn param_values(&self) -> &[f32] {
+        Limiter::param_values(self)
+    }
+    fn process(&mut self, io: crate::device::Io, _ctx: &Ctx) {
+        Limiter::process(self, io.l, io.r)
+    }
+    fn gain_reduction_db(&self) -> f32 {
+        self.gain_reduction_db
+    }
+    fn latency_samples(&self) -> usize {
+        self.la
     }
 }
 
@@ -597,7 +707,7 @@ impl Limiter {
 mod tests {
     use super::*;
 
-    const CTX: Ctx = Ctx { sample_rate: 48_000.0, bpm: 120.0 };
+    const CTX: Ctx = Ctx::stopped(48_000.0, 120.0);
 
     #[test]
     fn silence_in_silence_out_for_all_effects() {
@@ -713,6 +823,38 @@ mod limiter_tests {
         assert!(l.gain_reduction_db < 1e-3);
         let (s, _) = run(&mut l, 0.0, 128);
         assert!(s.iter().all(|x| *x == 0.0));
+    }
+
+    #[test]
+    fn lookahead_delays_quiet_audio_and_ramps_into_peaks_without_overshoot() {
+        let sr = 48_000.0;
+        let mut l = Limiter::new(sr);
+        l.set_param(3, 1.0); // 1.5 ms
+        let la = l.latency_samples();
+        assert_eq!(la, 72);
+        // Quiet: an exact copy delayed by the lookahead.
+        let mut a: Vec<f32> = (0..1024).map(|i| 0.2 * (i as f32 * 0.05).sin()).collect();
+        let orig = a.clone();
+        let mut b = a.clone();
+        l.process(&mut a, &mut b);
+        assert!(a[la..].iter().zip(&orig).all(|(x, y)| (x - y).abs() < 1e-6));
+        // A single spike far above the ceiling: no overshoot, and the gain
+        // starts dropping before the spike arrives (no step at the spike).
+        let mut l = Limiter::new(sr);
+        l.set_param(3, 1.0);
+        let ceil = db_to_gain(-0.3);
+        let mut x = vec![0.5f32; 2048];
+        x[1000] = 4.0;
+        let mut y = x.clone();
+        l.process(&mut x, &mut y);
+        assert!(x.iter().all(|v| v.abs() <= ceil + 1e-6), "overshoot");
+        let out_spike = 1000 + la;
+        assert!((x[out_spike] - ceil).abs() < 1e-3, "spike limited to the ceiling: {}", x[out_spike]);
+        assert!(x[out_spike - la / 2] < 0.5 - 1e-3, "gain ramps down ahead of the peak");
+        assert!(x[out_spike - la - 2] > 0.5 - 1e-6, "no reduction before the lookahead window");
+        // Every step of the ramp is small: the reduction is spread over the window.
+        let steps = x[out_spike - la..out_spike].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        assert!(steps < 0.01, "largest step {steps}");
     }
 
     #[test]

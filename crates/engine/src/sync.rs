@@ -14,6 +14,8 @@ struct DeviceKey {
     kind: xdaw_dsp::DeviceKind,
     sample: Option<String>,
     pads: Vec<Option<String>>,
+    /// Sidechain source: changing it changes the processing order.
+    sidechain: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -48,6 +50,7 @@ fn track_key(t: &Track) -> TrackKey {
                 kind: d.kind,
                 sample: d.sample.as_ref().map(|m| m.path.clone()),
                 pads: d.pads.iter().map(|p| p.as_ref().map(|m| m.path.clone())).collect(),
+                sidechain: d.sidechain,
             })
             .collect(),
         stops: t.slots.iter().map(|s| s.has_stop_button).collect(),

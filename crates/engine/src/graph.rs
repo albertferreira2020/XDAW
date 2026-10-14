@@ -14,6 +14,8 @@ use std::sync::Arc;
 
 pub const MAX_BLOCK: usize = 256;
 pub const MAX_EVENTS: usize = 1024;
+/// Longest plugin-delay compensation per track (samples).
+pub const MAX_PDC: usize = 16_384;
 pub const MAX_ACTIVE_NOTES: usize = 256;
 
 /// Looks up decoded media by reference; `None` means missing or not yet loaded.
@@ -151,6 +153,36 @@ pub struct RtDevice {
     pub id: Id,
     pub device: Device,
     pub bypass: bool,
+    /// Index in `Graph::tracks` of the track feeding this device's detector.
+    pub sidechain: Option<usize>,
+}
+
+/// Delay line aligning a track with the slowest path to the master
+/// (plugin-delay compensation). It is written every block, so a change of
+/// delay reads valid history.
+pub struct Pdc {
+    l: Vec<f32>,
+    r: Vec<f32>,
+    pos: usize,
+    pub delay: usize,
+}
+
+impl Pdc {
+    pub fn new() -> Self {
+        Self { l: vec![0.0; MAX_PDC], r: vec![0.0; MAX_PDC], pos: 0, delay: 0 }
+    }
+
+    pub fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
+        let d = self.delay.min(MAX_PDC - 1);
+        for i in 0..l.len() {
+            self.l[self.pos] = l[i];
+            self.r[self.pos] = r[i];
+            let k = (self.pos + MAX_PDC - d) % MAX_PDC;
+            l[i] = self.l[k];
+            r[i] = self.r[k];
+            self.pos = (self.pos + 1) % MAX_PDC;
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -252,9 +284,17 @@ pub struct RtTrack {
     pub l: Vec<f32>,
     pub r: Vec<f32>,
     pub events: Vec<NoteEvent>,
+    /// Output buffer of MIDI effects (swapped with `events`).
+    pub events_b: Vec<NoteEvent>,
+    pub pdc: Pdc,
 }
 
 impl RtTrack {
+    /// Samples of latency of this track's active devices.
+    pub fn device_latency(&self) -> usize {
+        self.devices.iter().filter(|d| !d.bypass).map(|d| d.device.latency_samples()).sum()
+    }
+
     pub fn is_audible_with(&self, any_solo: bool) -> bool {
         // Group tracks pass audio of soloed members; see `render_span`.
         !self.mixer.mute && (!any_solo || self.mixer.solo || matches!(self.kind, TrackKind::Return | TrackKind::Master))
@@ -275,6 +315,46 @@ pub struct Graph {
     pub group_r: Vec<Vec<f32>>,
     /// Group tracks, deepest nesting first.
     pub group_order: Vec<usize>,
+    /// Post-device, pre-fader copies of sidechain source tracks (empty for others).
+    pub sc_l: Vec<Vec<f32>>,
+    pub sc_r: Vec<Vec<f32>>,
+    /// Clip tracks in processing order (sidechain sources first).
+    pub clip_order: Vec<usize>,
+}
+
+impl Graph {
+    /// Latency of the slowest path to the master: each clip track's devices plus
+    /// those of the groups it feeds (spec D3.2).
+    pub fn path_latency(&self, i: usize) -> usize {
+        let mut lat = self.tracks[i].device_latency();
+        let mut g = self.tracks[i].output_group;
+        let mut guard = 0;
+        while let Some(x) = g {
+            lat += self.tracks[x].device_latency();
+            g = self.tracks[x].output_group;
+            guard += 1;
+            if guard > self.tracks.len() {
+                break;
+            }
+        }
+        lat
+    }
+
+    /// Sets every track's compensation delay; returns the total output latency
+    /// (aligned tracks plus the master chain). Return-track latency is not compensated.
+    pub fn update_pdc(&mut self) -> usize {
+        let mut most = 0;
+        for i in 0..self.tracks.len() {
+            if self.tracks[i].kind != TrackKind::Group {
+                most = most.max(self.path_latency(i));
+            }
+        }
+        for i in 0..self.tracks.len() {
+            let d = if self.tracks[i].kind == TrackKind::Group { 0 } else { most - self.path_latency(i) };
+            self.tracks[i].pdc.delay = d;
+        }
+        most + self.master.device_latency()
+    }
 }
 
 impl Graph {
@@ -392,7 +472,7 @@ fn compile_track(t: &model::Track, media: &dyn MediaSource, sr: f64, bpm: f64) -
             for i in 0..d.kind.params().len() {
                 device.set_param(i, d.param(i));
             }
-            RtDevice { id: d.id, device, bypass: d.bypass }
+            RtDevice { id: d.id, device, bypass: d.bypass, sidechain: None }
         })
         .collect();
     let mut sends_db = [model::SEND_OFF_DB; MAX_RETURNS];
@@ -429,6 +509,8 @@ fn compile_track(t: &model::Track, media: &dyn MediaSource, sr: f64, bpm: f64) -
         l: vec![0.0; MAX_BLOCK],
         r: vec![0.0; MAX_BLOCK],
         events: Vec::with_capacity(MAX_EVENTS),
+        events_b: Vec::with_capacity(MAX_EVENTS),
+        pdc: Pdc::new(),
     }
 }
 
@@ -472,11 +554,16 @@ pub fn build_graph(project: &Project, media: &dyn MediaSource, sample_rate: f64)
     };
     let mut group_order: Vec<usize> = (0..groups).filter(|&i| tracks[i].kind == TrackKind::Group).collect();
     group_order.sort_by_key(|&i| std::cmp::Reverse(depth(i)));
+    let mut returns: Vec<RtTrack> = project.returns.iter().map(|t| compile_track(t, media, sample_rate, bpm)).collect();
+    let mut master = compile_track(&project.master, media, sample_rate, bpm);
+    let clip_order = resolve_sidechains(project, &mut tracks, &mut returns, &mut master);
+    let is_source = |i: usize| tracks.iter().chain(&returns).chain(std::iter::once(&master)).flat_map(|t| &t.devices).any(|d| d.sidechain == Some(i));
+    let sc_len: Vec<usize> = (0..groups).map(|i| if is_source(i) { MAX_BLOCK } else { 0 }).collect();
     Ok(Graph {
         sample_rate,
         tracks,
-        returns: project.returns.iter().map(|t| compile_track(t, media, sample_rate, bpm)).collect(),
-        master: compile_track(&project.master, media, sample_rate, bpm),
+        returns,
+        master,
         time_signature: project.transport.time_signature,
         global_quantize: project.transport.global_quantize,
         return_l: vec![vec![0.0; MAX_BLOCK]; project.returns.len()],
@@ -484,7 +571,55 @@ pub fn build_graph(project: &Project, media: &dyn MediaSource, sample_rate: f64)
         group_l: vec![vec![0.0; MAX_BLOCK]; groups],
         group_r: vec![vec![0.0; MAX_BLOCK]; groups],
         group_order,
+        sc_l: sc_len.iter().map(|&n| vec![0.0; n]).collect(),
+        sc_r: sc_len.iter().map(|&n| vec![0.0; n]).collect(),
+        clip_order,
     })
+}
+
+/// Points sidechained devices at their source tracks and returns the order in
+/// which clip (non-group) tracks are processed: every source before the tracks
+/// listening to it (spec D3.1). Sources must be audio or MIDI tracks; a device
+/// whose source is missing, a group, itself, or part of a cycle listens to itself.
+fn resolve_sidechains(project: &Project, tracks: &mut [RtTrack], returns: &mut [RtTrack], master: &mut RtTrack) -> Vec<usize> {
+    let index = |id: Id| project.tracks.iter().position(|t| t.id == id && t.kind != TrackKind::Group);
+    let wire = |rt: &mut RtTrack, model: &model::Track, own: Option<usize>| {
+        for (d, m) in rt.devices.iter_mut().zip(model.devices.iter().filter(|_| model.frozen.is_none())) {
+            d.sidechain = if m.kind.supports_sidechain() { m.sidechain.and_then(index).filter(|&s| Some(s) != own) } else { None };
+        }
+    };
+    for (i, (rt, m)) in tracks.iter_mut().zip(&project.tracks).enumerate() {
+        wire(rt, m, Some(i));
+    }
+    for (rt, m) in returns.iter_mut().zip(&project.returns) {
+        wire(rt, m, None);
+    }
+    wire(master, &project.master, None);
+    // Depth-first topological order over clip tracks; edges listener → source.
+    let n = tracks.len();
+    let clip: Vec<bool> = tracks.iter().map(|t| t.kind != TrackKind::Group).collect();
+    let mut state = vec![0u8; n]; // 0 new, 1 visiting, 2 done
+    let mut order = Vec::with_capacity(n);
+    fn visit(i: usize, tracks: &mut [RtTrack], state: &mut [u8], order: &mut Vec<usize>) {
+        state[i] = 1;
+        for k in 0..tracks[i].devices.len() {
+            let Some(s) = tracks[i].devices[k].sidechain else { continue };
+            match state[s] {
+                1 => tracks[i].devices[k].sidechain = None, // cycle: fall back to self
+                0 => visit(s, tracks, state, order),
+                _ => {}
+            }
+        }
+        state[i] = 2;
+        order.push(i);
+    }
+    for i in 0..n {
+        if clip[i] && state[i] == 0 {
+            visit(i, tracks, &mut state, &mut order);
+        }
+    }
+    // Groups cannot be sources but may listen; they run after all clip tracks anyway.
+    order
 }
 
 /// Moves runtime state from a retiring graph into its replacement (audio thread; no allocation).
@@ -502,6 +637,7 @@ pub fn transfer_state(old: &mut Graph, new: &mut Graph) {
         new.rt.tail = o.rt.tail.take();
         new.rt.follow_at = o.rt.follow_at;
         new.rt.rng = o.rt.rng;
+        std::mem::swap(&mut o.pdc, &mut new.pdc);
         let (vol, pl, pr) = (new.rt.volume.target(), new.rt.pan_l.target(), new.rt.pan_r.target());
         std::mem::swap(&mut o.rt.volume, &mut new.rt.volume);
         std::mem::swap(&mut o.rt.pan_l, &mut new.rt.pan_l);

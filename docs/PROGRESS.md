@@ -137,3 +137,16 @@ Repository: `~/Documents/XDAW` (local git, branch `main`, no remote yet). REA li
 - Fix: content lives in a `new_child` Ui (its size never feeds the panel); editors subtract
   `item_spacing.y`. Verified: audio clip, MIDI clip, Devices and Arrangement stay at 260; dragging the
   edge to 394 and 174 px holds.
+
+## Devices milestone (2026-10-13)
+- Spec first: `docs/specs/devices.md` (D1 chain rules, D2 audio effects, D3 sidechain/lookahead/PDC,
+  D4 MIDI effects, D5 instruments). Commit trailer `Clean-Room: single-role`.
+- `device.rs` rewritten as one `devices!` table plus a `Processor` trait (MIDI effects, sidechain input,
+  latency); 26 device kinds. New modules: `tone`, `modulation`, `dynamics`, `midi_fx`, `synths`.
+- Engine: MIDI effects double-buffer events; sidechain source tracks render first (`clip_order`),
+  cycles fall back to self; per-track delay compensation (`Pdc`, `Graph::update_pdc`); export trims
+  the total latency.
+- Tests: 175 pass. Mutation check: disabling PDC or the sidechain ordering fails 3 engine tests.
+- Bug found by tests: the Warm saturator curve exceeded ±1 with bias; now normalised.
+- Real-time check (scripted, playing): callback mean 0.09 ms, max 0.17 ms of a 5.3 ms budget.
+- Not verified: listening tests (timbre), live MIDI keyboard through MIDI effects, GR meters (not shown).

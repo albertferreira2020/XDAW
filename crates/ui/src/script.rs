@@ -243,6 +243,18 @@ impl Script {
                     }
                 }
                 "view" => app.view = if args.first() == Some(&"arrangement") { View::Arrangement } else { View::Session },
+                "adddevice" => {
+                    // adddevice <track 1-based> <DeviceKind name, e.g. ParamEq>
+                    let t = (num(0) as usize).saturating_sub(1);
+                    match xdaw_dsp::DeviceKind::ALL.iter().find(|k| format!("{k:?}") == args.get(1).copied().unwrap_or("")) {
+                        Some(&k) => {
+                            app.select_track(xdaw_project::TrackRef::Track(t));
+                            crate::browser::add_device(app, xdaw_project::TrackRef::Track(t), k);
+                            println!("[script] devices {:?}", app.project.tracks[t].devices.iter().map(|d| d.kind).collect::<Vec<_>>());
+                        }
+                        None => println!("[script] adddevice: unknown kind"),
+                    }
+                }
                 "panel" => println!("[script] panel detail_h={:.1}", app.detail_h),
                 "detail" => app.detail = if args.first() == Some(&"clip") { Detail::Clip } else { Detail::Devices },
                 "scene" => crate::session::launch_scene(app, (num(0) as usize).saturating_sub(1)),

@@ -4,17 +4,22 @@
 //! are created in constructors, which must run off the audio thread.
 
 pub mod device;
+pub mod dynamics;
 pub mod effects;
 pub mod env;
 pub mod filter;
 pub mod instruments;
 pub mod meter;
+pub mod midi_fx;
+pub mod modulation;
 pub mod params;
 pub mod slicing;
 pub mod presets;
 pub mod stretch;
+pub mod synths;
+pub mod tone;
 pub mod util;
 
-pub use device::{Device, DeviceKind, DeviceMedia};
+pub use device::{Category, Device, DeviceKind, DeviceMedia, Io};
 pub use instruments::SampleData;
 pub use params::{Ctx, NoteEvent, NoteKind, ParamDesc, ParamKind};

@@ -60,9 +60,18 @@
 
 ## Devices
 
-Instruments go first on MIDI tracks (Poly, Sampler, Drum Kit); effects follow in order. Use ◀ ▶ to
-reorder, "On" to bypass, "..." to save a preset, reset or delete. Drop audio files on the Sampler's
-sample field or on Drum Kit pads. Knobs: drag vertically (Shift for fine), double-click to reset.
+A chain has three sections, always in this order: MIDI effects (Arpeggiator, Chord Stack, Scale
+Lock, Note Duration, Pitch Randomizer, Velocity Shaper), one instrument (Poly, FM Synth, Morph
+Synth, Sampler, Drum Kit), then audio effects. MIDI effects and instruments need a MIDI track.
+Use ◀ ▶ to reorder within a section, "On" to bypass, "..." to save a preset, reset or delete.
+Drop audio files on the Sampler's sample field or on Drum Kit pads. Knobs: drag vertically (Shift
+for fine), double-click to reset.
+
+- **Parametric EQ**: pick a band with 1–8, switch it On, choose its type; the curve shows the sum.
+- **Sidechain**: Compressor, Bus Compressor and Gate have a Sidechain chooser; pick another track
+  to duck or gate this one with it (a muted source still works).
+- **Limiter Lookahead**: smoother limiting at the cost of a few milliseconds of latency, which XDAW
+  compensates on all other tracks automatically.
 
 ## Files
 

@@ -24,6 +24,9 @@ pub struct Coeffs {
 }
 
 impl Coeffs {
+    /// Passes the signal unchanged.
+    pub const IDENTITY: Coeffs = Coeffs { b0: 1.0, b1: 0.0, b2: 0.0, a1: 0.0, a2: 0.0 };
+
     pub fn new(kind: BiquadKind, sample_rate: f64, freq: f64, q: f64, gain_db: f64) -> Self {
         let freq = freq.clamp(10.0, sample_rate * 0.49);
         let q = q.max(0.05);
@@ -103,6 +106,28 @@ impl Biquad {
     pub fn reset(&mut self) {
         self.z1 = 0.0;
         self.z2 = 0.0;
+    }
+}
+
+/// One-pole DC blocker (high-pass around 10 Hz).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct DcBlocker {
+    x1: f32,
+    y1: f32,
+    r: f32,
+}
+
+impl DcBlocker {
+    pub fn new(sample_rate: f32) -> Self {
+        Self { x1: 0.0, y1: 0.0, r: (-2.0 * std::f32::consts::PI * 10.0 / sample_rate).exp() }
+    }
+
+    #[inline]
+    pub fn process(&mut self, x: f32) -> f32 {
+        let y = x - self.x1 + self.r * self.y1;
+        self.x1 = x;
+        self.y1 = if y.is_finite() { y } else { 0.0 };
+        self.y1
     }
 }
 

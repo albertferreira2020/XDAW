@@ -7,7 +7,7 @@
 use crate::graph::*;
 use crate::protocol::*;
 use xdaw_dsp::util::{db_to_gain, pan_gains};
-use xdaw_dsp::{Ctx, NoteEvent, NoteKind};
+use xdaw_dsp::{Ctx, Io, NoteEvent, NoteKind};
 use xdaw_project::{Monitor, TrackKind, WarpMode};
 use xdaw_sequencer::{Beats, Clock, LaunchEvent, LaunchMode, Quantize, TrackLauncher};
 use rtrb::{Consumer, Producer};
@@ -105,6 +105,8 @@ pub struct Renderer {
     rec_track: Option<usize>,
     /// Output frames rendered since creation, independent of transport state.
     frames_total: u64,
+    /// Samples between the timeline and the master output (compensated device latency).
+    output_latency: usize,
 }
 
 /// Pushes an event only if capacity allows (never reallocates on the audio thread).
@@ -116,6 +118,11 @@ fn push_ev(v: &mut Vec<NoteEvent>, e: NoteEvent) {
 }
 
 impl Renderer {
+    /// Samples the master output lags the timeline by (compensated device latency).
+    pub fn output_latency(&self) -> usize {
+        self.output_latency
+    }
+
     pub fn new(graph: Box<Graph>, bpm: f64, rings: Rings, status: Arc<SharedStatus>) -> Self {
         let sr = graph.sample_rate;
         status.sample_rate.store(sr);
@@ -146,6 +153,7 @@ impl Renderer {
             rec: None,
             rec_track: None,
             frames_total: 0,
+            output_latency: 0,
         }
     }
 
@@ -423,7 +431,7 @@ impl Renderer {
                     if let Some(d) = t.devices.get_mut(device as usize) {
                         d.bypass = bypass;
                         // Voices may have missed note-offs while bypassed.
-                        if d.device.kind().is_instrument() {
+                        if d.device.kind().needs_midi_track() {
                             push_ev(&mut t.events, NoteEvent { offset: 0, kind: NoteKind::AllOff });
                         }
                     }
@@ -727,7 +735,8 @@ impl Renderer {
             b0,
             b1: if self.playing { self.clock.beat_at(self.sample + n as i64) } else { b0 },
         };
-        let ctx = Ctx { sample_rate: self.graph.sample_rate as f32, bpm: self.clock.bpm() as f32 };
+        let ctx = Ctx { sample_rate: self.graph.sample_rate as f32, bpm: self.clock.bpm() as f32, beat: b0, beats_per_sample: span.clock.beats_per_sample(), playing: span.playing };
+        self.output_latency = self.graph.update_pdc();
         let sig = self.graph.time_signature;
         let any_solo = self.graph.any_solo();
         let live_len = self.live_len;
@@ -752,14 +761,8 @@ impl Renderer {
         for pass in 0..2 {
         for k in 0..self.graph.tracks.len() {
             // Groups run innermost first so a nested group's output reaches its parent bus in time.
-            let ti = if pass == 1 {
-                match self.graph.group_order.get(k) {
-                    Some(&g) => g,
-                    None => break,
-                }
-            } else {
-                k
-            };
+            let order = if pass == 1 { &self.graph.group_order } else { &self.graph.clip_order };
+            let Some(&ti) = order.get(k) else { break };
             let is_group = self.graph.tracks[ti].kind == TrackKind::Group;
             if (pass == 1) != is_group {
                 continue;
@@ -864,7 +867,15 @@ impl Renderer {
                 }
             }
             let (gr, gr_r) = (&mut self.graph.return_l, &mut self.graph.return_r);
-            process_track(t, n, &ctx, any_solo, parent_solo || member_solo);
+            run_devices(t, n, &ctx, &self.graph.sc_l, &self.graph.sc_r);
+            if !self.graph.sc_l[ti].is_empty() {
+                self.graph.sc_l[ti][..n].copy_from_slice(&t.l[..n]);
+                self.graph.sc_r[ti][..n].copy_from_slice(&t.r[..n]);
+            }
+            apply_fader(t, n, any_solo, parent_solo || member_solo);
+            if !is_group {
+                t.pdc.process(&mut t.l[..n], &mut t.r[..n]);
+            }
             for (k, (rl, rr)) in gr.iter_mut().zip(gr_r.iter_mut()).enumerate() {
                 let send = &mut t.rt.sends[k];
                 if send.target() <= 0.0 && !send.is_ramping() {
@@ -901,7 +912,8 @@ impl Renderer {
             }
             t.l[..n].copy_from_slice(&self.graph.return_l[ri][..n]);
             t.r[..n].copy_from_slice(&self.graph.return_r[ri][..n]);
-            process_track(t, n, &ctx, any_solo, false);
+            run_devices(t, n, &ctx, &self.graph.sc_l, &self.graph.sc_r);
+            apply_fader(t, n, any_solo, false);
             for i in 0..n {
                 ml[i] += t.l[i];
                 mr[i] += t.r[i];
@@ -915,7 +927,8 @@ impl Renderer {
         }
         m.l[..n].copy_from_slice(ml);
         m.r[..n].copy_from_slice(mr);
-        process_track(m, n, &ctx, false, false);
+        run_devices(m, n, &ctx, &self.graph.sc_l, &self.graph.sc_r);
+        apply_fader(m, n, false, false);
         let bad = xdaw_dsp::util::sanitize(&mut m.l[..n]) | xdaw_dsp::util::sanitize(&mut m.r[..n]);
         if bad {
             self.status.nonfinite_blocks.fetch_add(1, Ordering::Relaxed);
@@ -1415,18 +1428,35 @@ fn render_tail(t: &mut RtTrack, span: &Span, a: usize, b: usize) {
     t.rt.tail = (tail.remaining > 0).then_some(tail);
 }
 
-/// Device chain plus fader, pan and mute/solo for one track.
-fn process_track(t: &mut RtTrack, n: usize, ctx: &Ctx, any_solo: bool, solo_through_group: bool) {
-    t.events.sort_unstable_by_key(|e| (e.offset, matches!(e.kind, NoteKind::On { .. })));
-    let audible = t.is_audible_with(any_solo) || (!t.mixer.mute && solo_through_group);
-    let (l, r) = (&mut t.l[..n], &mut t.r[..n]);
-    for d in t.devices.iter_mut() {
+/// Runs a track's device chain (spec D1): MIDI effects transform the events
+/// (double-buffered, re-sorted after each), instruments and audio effects
+/// process the audio. `sc_*` are the sidechain source buffers by track index.
+fn run_devices(t: &mut RtTrack, n: usize, ctx: &Ctx, sc_l: &[Vec<f32>], sc_r: &[Vec<f32>]) {
+    let key = |e: &NoteEvent| (e.offset, matches!(e.kind, NoteKind::On { .. }));
+    t.events.sort_unstable_by_key(key);
+    let RtTrack { devices, events, events_b, l, r, .. } = t;
+    let (l, r) = (&mut l[..n], &mut r[..n]);
+    for d in devices.iter_mut() {
         if d.bypass {
             continue;
         }
-        d.device.process(&t.events, l, r, ctx);
+        if d.device.kind().is_midi_effect() {
+            events_b.clear();
+            d.device.process_midi(events, events_b, n, ctx);
+            std::mem::swap(events, events_b);
+            events.sort_unstable_by_key(key);
+            continue;
+        }
+        let sidechain = d.sidechain.and_then(|s| Some((sc_l.get(s).filter(|b| b.len() >= n)?, sc_r.get(s).filter(|b| b.len() >= n)?))).map(|(a, b)| (&a[..n], &b[..n]));
+        d.device.process(Io { events, l: &mut *l, r: &mut *r, sidechain }, ctx);
     }
-    t.events.clear();
+    events.clear();
+}
+
+/// Fader, pan and mute/solo for one track.
+fn apply_fader(t: &mut RtTrack, n: usize, any_solo: bool, solo_through_group: bool) {
+    let audible = t.is_audible_with(any_solo) || (!t.mixer.mute && solo_through_group);
+    let (l, r) = (&mut t.l[..n], &mut t.r[..n]);
     for i in 0..n {
         let v = t.rt.volume.next();
         let (pl, pr) = (t.rt.pan_l.next(), t.rt.pan_r.next());

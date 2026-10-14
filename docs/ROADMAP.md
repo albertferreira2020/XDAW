@@ -1,4 +1,4 @@
-# Roadmap: what is still missing versus Live
+# Roadmap
 
 Compared against the public Live material (Session and Arrangement views, devices, recording,
 warping) and our own `FEATURE_MATRIX.md`. Ordered by how much a user notices the gap.
@@ -22,13 +22,15 @@ Known gaps inside those items:
 
 ## Still to do
 ### Devices
-9. Racks: Instrument, Drum and Effect Racks with chains, zones and macro automation.
-10. More built-in devices: EQ Eight, Glue-style compressor, Saturator, Auto Filter, Chorus,
-    Phaser, Gate, Multiband, Looper, Spectrum analyser, Simpler-style slicing sampler,
-    wavetable and FM synths.
-11. MIDI effects: Arpeggiator, Chord, Scale, Note Length, Random, Velocity.
-12. Sidechain routing on compressor/limiter, lookahead mode for the Limiter.
-13. VST3 / Audio Unit hosting with plugin delay compensation.
+Done (spec `docs/specs/devices.md`): Parametric EQ, Bus Compressor, Saturator, Motion Filter,
+Chorus, Phaser, Gate, Multiband Compressor, FM Synth, Morph Synth; six MIDI effects; sidechain for
+Compressor/Bus Compressor/Gate; Limiter lookahead with automatic delay compensation.
+
+9. Racks: instrument, drum and effect racks with parallel chains, key/velocity zones and macros.
+10. Remaining built-in devices: Looper, spectrum analyser, slicing sampler.
+11. Gain-reduction meters on the dynamics devices (values exist in the engine, not shown yet).
+12. Compensation of device latency on return tracks.
+13. VST3 / Audio Unit hosting (needs a licence decision on the VST3 SDK).
 
 ## Session and performance
 14. Clip launch via MIDI/key mapping UI (MIDI map mode) and controller scripts.

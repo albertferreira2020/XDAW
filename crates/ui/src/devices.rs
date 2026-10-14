@@ -119,15 +119,15 @@ fn apply(app: &mut XdawApp, r: TrackRef, a: Action) {
             app.project.track_mut(r).automation.retain(|l| !matches!(l.target, ParamTarget::Device { device, .. } if device == id));
             app.label("Delete Device");
         }
+        // Devices move only within their section (MIDI effects, instrument, audio effects).
         Action::MoveLeft(i) if i > 0 => {
-            // Instruments stay first in the chain.
-            if !(devices[i - 1].kind.is_instrument()) {
+            if devices[i - 1].kind.category() == devices[i].kind.category() {
                 devices.swap(i, i - 1);
                 app.label("Move Device");
             }
         }
         Action::MoveRight(i) if i + 1 < devices.len() => {
-            if !devices[i].kind.is_instrument() {
+            if devices[i + 1].kind.category() == devices[i].kind.category() {
                 devices.swap(i, i + 1);
                 app.label("Move Device");
             }
@@ -198,20 +198,86 @@ fn device_box(app: &mut XdawApp, ui: &mut Ui, r: TrackRef, i: usize) -> Option<A
                 drum_pads(app, ui, r, i, &d);
                 return;
             }
-            params(app, ui, r, i, &d, track_id);
-            if d.kind == DeviceKind::Compressor {
-                ui.label(RichText::new("GR meter: see master/track meters").size(9.0).color(theme::TEXT_DIM));
+            if d.kind.supports_sidechain() {
+                sidechain_chooser(app, ui, r, i, &d);
             }
+            if d.kind == DeviceKind::ParamEq {
+                param_eq(app, ui, r, i, &d, track_id);
+                return;
+            }
+            let all: Vec<usize> = (0..d.kind.params().len()).collect();
+            params(app, ui, r, i, &d, track_id, &all);
         });
     });
     action
 }
 
-fn params(app: &mut XdawApp, ui: &mut Ui, r: TrackRef, i: usize, d: &DeviceState, track_id: Id) {
+/// Detector source of a Compressor, Bus Compressor or Gate (spec D3.1).
+fn sidechain_chooser(app: &mut XdawApp, ui: &mut Ui, r: TrackRef, i: usize, d: &DeviceState) {
+    let own = app.project.track(r).id;
+    let sources: Vec<(Id, String)> = app.project.tracks.iter().filter(|t| t.id != own && t.kind != TrackKind::Group).map(|t| (t.id, t.name.clone())).collect();
+    let current = d.sidechain.and_then(|id| sources.iter().find(|s| s.0 == id)).map_or("Self".to_string(), |s| s.1.clone());
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Sidechain").size(9.5).color(theme::TEXT_DIM));
+        let mut pick = d.sidechain;
+        egui::ComboBox::from_id_salt(("sidechain", d.id)).width(110.0).selected_text(RichText::new(current).size(10.0)).show_ui(ui, |ui| {
+            ui.selectable_value(&mut pick, None, "Self");
+            for (id, name) in &sources {
+                ui.selectable_value(&mut pick, Some(*id), name);
+            }
+        });
+        if pick != d.sidechain {
+            app.project.track_mut(r).devices[i].sidechain = pick;
+            app.label("Sidechain");
+        }
+    });
+}
+
+/// Parametric EQ: response curve, band selector, then the selected band's controls.
+fn param_eq(app: &mut XdawApp, ui: &mut Ui, r: TrackRef, i: usize, d: &DeviceState, track_id: Id) {
+    use xdaw_dsp::tone::{peq_response_db, PEQ_BANDS, PEQ_STRIDE};
+    let values: Vec<f32> = (0..d.kind.params().len()).map(|k| d.param(k)).collect();
+    let (rect, _) = ui.allocate_exact_size(vec2(8.0 * 44.0, 64.0), egui::Sense::hover());
+    let p = ui.painter_at(rect);
+    p.rect_filled(rect, 2.0, theme::BG);
+    let (lo, hi, range_db) = (20f64.ln(), 20_000f64.ln(), 18.0f32);
+    let y_of = |db: f32| rect.center().y - (db / range_db).clamp(-1.0, 1.0) * rect.height() * 0.5;
+    for f in [100.0f64, 1_000.0, 10_000.0] {
+        let x = rect.left() + ((f.ln() - lo) / (hi - lo)) as f32 * rect.width();
+        p.line_segment([egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())], (1.0, theme::GRID));
+    }
+    p.line_segment([egui::pos2(rect.left(), y_of(0.0)), egui::pos2(rect.right(), y_of(0.0))], (1.0, theme::GRID));
+    let pts: Vec<egui::Pos2> = (0..=rect.width() as usize)
+        .map(|k| {
+            let x = rect.left() + k as f32;
+            let f = (lo + (k as f64 / rect.width() as f64) * (hi - lo)).exp();
+            egui::pos2(x, y_of(peq_response_db(&values, 48_000.0, f) as f32))
+        })
+        .collect();
+    p.add(egui::Shape::line(pts, egui::Stroke::new(1.5, theme::ACCENT)));
+    let sel_id = egui::Id::new(("peq_band", d.id));
+    let mut band: usize = ui.data(|m| m.get_temp(sel_id)).unwrap_or(0);
+    ui.horizontal(|ui| {
+        for b in 0..PEQ_BANDS {
+            let on = values[b * PEQ_STRIDE] >= 0.5;
+            let label = RichText::new(format!("{}", b + 1)).size(10.0).color(if on { theme::ACCENT } else { theme::TEXT_DIM });
+            if ui.selectable_label(band == b, label).on_hover_text("Select band (its On switch is below)").clicked() {
+                band = b;
+            }
+        }
+    });
+    ui.data_mut(|m| m.insert_temp(sel_id, band));
+    let mut shown: Vec<usize> = (band * PEQ_STRIDE..band * PEQ_STRIDE + PEQ_STRIDE).collect();
+    shown.push(PEQ_BANDS * PEQ_STRIDE);
+    params(app, ui, r, i, d, track_id, &shown);
+}
+
+fn params(app: &mut XdawApp, ui: &mut Ui, r: TrackRef, i: usize, d: &DeviceState, track_id: Id, shown: &[usize]) {
     let descs = d.kind.params();
     let per_row = 6;
     egui::Grid::new(("params", d.id)).spacing(vec2(6.0, 2.0)).show(ui, |ui| {
-        for (pi, desc) in descs.iter().enumerate() {
+        for (n, &pi) in shown.iter().enumerate() {
+            let desc = &descs[pi];
             let v = d.param(pi);
             ui.vertical(|ui| {
                 ui.set_width(56.0);
@@ -234,7 +300,7 @@ fn params(app: &mut XdawApp, ui: &mut Ui, r: TrackRef, i: usize, d: &DeviceState
                             v
                         }
                     }
-                    ParamKind::Continuous { .. } => {
+                    ParamKind::Continuous { .. } | ParamKind::Int => {
                         let mut n = desc.to_normalized(v);
                         let bipolar = desc.min < 0.0 && desc.max > 0.0;
                         let resp = mixer::knob(ui, &mut n, desc.to_normalized(desc.default), bipolar, theme::ACCENT);
@@ -256,7 +322,7 @@ fn params(app: &mut XdawApp, ui: &mut Ui, r: TrackRef, i: usize, d: &DeviceState
                     app.record_automation(r, ParamTarget::Device { device: d.id, param: pi }, new);
                 }
             });
-            if (pi + 1) % per_row == 0 {
+            if (n + 1) % per_row == 0 {
                 ui.end_row();
             }
         }

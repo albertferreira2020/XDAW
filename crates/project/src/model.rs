@@ -1,7 +1,7 @@
 //! Project data model. Owned by the UI thread; the engine receives compiled snapshots.
 
 use crate::arrange::*;
-use xdaw_dsp::DeviceKind;
+use xdaw_dsp::{Category, DeviceKind};
 use xdaw_sequencer::{Beats, ClipQuantize, ClipRegion, LaunchMode, Quantize, TimeSignature};
 use serde::{Deserialize, Serialize};
 
@@ -201,6 +201,10 @@ pub struct DeviceState {
     pub pads: Vec<Option<MediaRef>>,
     #[serde(default)]
     pub preset_name: Option<String>,
+    /// Track whose signal drives this device's detector (Compressor, Bus
+    /// Compressor, Gate); `None` = the device's own input.
+    #[serde(default)]
+    pub sidechain: Option<Id>,
 }
 
 impl DeviceState {
@@ -213,6 +217,7 @@ impl DeviceState {
             sample: None,
             pads: if kind == DeviceKind::DrumKit { vec![None; xdaw_dsp::instruments::PADS] } else { vec![] },
             preset_name: None,
+            sidechain: None,
         }
     }
 
@@ -518,15 +523,15 @@ impl Project {
         let id = self.alloc_id();
         let t = self.track_mut(track);
         let state = DeviceState::new(id, kind);
-        if kind.is_instrument() {
-            // An instrument goes first and replaces an existing instrument.
-            if t.devices.first().is_some_and(|d| d.kind.is_instrument()) {
-                t.devices[0] = state;
-            } else {
-                t.devices.insert(0, state);
-            }
-        } else {
-            t.devices.push(state);
+        // Sections: MIDI effects, then one instrument (replacing an existing one), then audio effects.
+        let midi_fx = t.devices.iter().take_while(|d| d.kind.is_midi_effect()).count();
+        match kind.category() {
+            Category::MidiEffect => t.devices.insert(midi_fx, state),
+            Category::Instrument => match t.devices.iter().position(|d| d.kind.is_instrument()) {
+                Some(i) => t.devices[i] = state,
+                None => t.devices.insert(midi_fx, state),
+            },
+            Category::AudioEffect => t.devices.push(state),
         }
         id
     }
@@ -651,9 +656,15 @@ impl Project {
                 }
             }
             for d in &t.devices {
-                if d.kind.is_instrument() && t.kind != TrackKind::Midi {
-                    issues.push(format!("instrument on non-MIDI track '{}'", t.name));
+                if d.kind.needs_midi_track() && t.kind != TrackKind::Midi {
+                    issues.push(format!("{} on non-MIDI track '{}'", d.kind.name(), t.name));
                 }
+            }
+            if t.devices.windows(2).any(|w| w[0].kind.category() > w[1].kind.category()) {
+                issues.push(format!("devices on '{}' are out of order (MIDI effects, instrument, audio effects)", t.name));
+            }
+            if t.devices.iter().filter(|d| d.kind.is_instrument()).count() > 1 {
+                issues.push(format!("more than one instrument on '{}'", t.name));
             }
         }
         if self.returns.iter().any(|r| !r.mixer.sends_db.is_empty()) {

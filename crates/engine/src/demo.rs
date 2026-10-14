@@ -177,7 +177,7 @@ fn render_synth(notes: &[(f64, f64, u8, u8)], beats: f64, setup: impl Fn(&mut Sy
         timed.push((frames_for_beats(start + len), NoteKind::Off { pitch }));
     }
     timed.sort_by_key(|(f, k)| (*f, matches!(k, NoteKind::On { .. })));
-    let ctx = Ctx { sample_rate: SR as f32, bpm: BPM as f32 };
+    let ctx = Ctx::stopped(SR as f32, BPM as f32);
     let mut l = vec![0.0f32; total + tail];
     let mut r = vec![0.0f32; total + tail];
     let block = 256;

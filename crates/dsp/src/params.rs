@@ -7,6 +7,8 @@ pub enum ParamKind {
     /// Discrete choice; value is the index.
     Choice(&'static [&'static str]),
     Toggle,
+    /// Whole numbers (semitones, octaves, MIDI velocities); a linear knob.
+    Int,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -31,6 +33,10 @@ impl ParamDesc {
 
     pub const fn choice(id: &'static str, name: &'static str, options: &'static [&'static str], default: f32) -> Self {
         Self { id, name, min: 0.0, max: (options.len() - 1) as f32, default, unit: "", kind: ParamKind::Choice(options) }
+    }
+
+    pub const fn int(id: &'static str, name: &'static str, min: f32, max: f32, default: f32, unit: &'static str) -> Self {
+        Self { id, name, min, max, default, unit, kind: ParamKind::Int }
     }
 
     pub const fn toggle(id: &'static str, name: &'static str, default: bool) -> Self {
@@ -70,6 +76,8 @@ impl ParamDesc {
         match self.kind {
             ParamKind::Choice(opts) => opts.get(v as usize).copied().unwrap_or("?").to_string(),
             ParamKind::Toggle => if v >= 0.5 { "On" } else { "Off" }.to_string(),
+            ParamKind::Int if self.unit.is_empty() => format!("{v:.0}"),
+            ParamKind::Int => format!("{v:.0} {}", self.unit),
             ParamKind::Continuous { .. } => {
                 if self.unit == "Hz" && v >= 1000.0 {
                     format!("{:.2} kHz", v / 1000.0)
@@ -103,6 +111,18 @@ pub struct NoteEvent {
 pub struct Ctx {
     pub sample_rate: f32,
     pub bpm: f32,
+    /// Song position (beats) of the block's first sample.
+    pub beat: f64,
+    pub beats_per_sample: f64,
+    /// True while the transport plays (song position advances).
+    pub playing: bool,
+}
+
+impl Ctx {
+    /// Stopped transport at the song start.
+    pub const fn stopped(sample_rate: f32, bpm: f32) -> Self {
+        Self { sample_rate, bpm, beat: 0.0, beats_per_sample: bpm as f64 / 60.0 / sample_rate as f64, playing: false }
+    }
 }
 
 pub fn midi_to_hz(note: f32) -> f32 {

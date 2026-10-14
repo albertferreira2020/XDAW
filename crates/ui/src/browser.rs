@@ -6,7 +6,7 @@ use crate::theme;
 use egui::{RichText, Ui};
 use std::path::{Path, PathBuf};
 use xdaw_dsp::presets::factory_presets;
-use xdaw_dsp::DeviceKind;
+use xdaw_dsp::{Category, DeviceKind};
 use xdaw_project::*;
 use xdaw_sequencer::ClipRegion;
 
@@ -62,19 +62,16 @@ pub fn show(app: &mut XdawApp, ui: &mut Ui) {
     let filter = app.browser.filter.to_lowercase();
     let matches = |s: &str| filter.is_empty() || s.to_lowercase().contains(&filter);
     egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
-        egui::CollapsingHeader::new("Instruments").default_open(true).show(ui, |ui| {
-            for k in DeviceKind::ALL.into_iter().filter(|k| k.is_instrument() && matches(k.name())) {
-                item(app, ui, k.name(), BrowserItem::Device(k));
-            }
-        });
-        egui::CollapsingHeader::new("Audio Effects").default_open(true).show(ui, |ui| {
-            for k in DeviceKind::ALL.into_iter().filter(|k| !k.is_instrument() && matches(k.name())) {
-                item(app, ui, k.name(), BrowserItem::Device(k));
-            }
-        });
+        for cat in [Category::Instrument, Category::AudioEffect, Category::MidiEffect] {
+            egui::CollapsingHeader::new(cat.label()).default_open(true).show(ui, |ui| {
+                for &k in DeviceKind::ALL.iter().filter(|k| k.category() == cat && matches(k.name())) {
+                    item(app, ui, k.name(), BrowserItem::Device(k));
+                }
+            });
+        }
         egui::CollapsingHeader::new("Presets").show(ui, |ui| {
             let dir = presets_dir();
-            for kind in DeviceKind::ALL {
+            for &kind in DeviceKind::ALL {
                 let mut files: Vec<PathBuf> = std::fs::read_dir(dir.join(format!("{kind:?}")))
                     .map(|e| e.flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|e| e == "json")).collect())
                     .unwrap_or_default();
@@ -180,7 +177,7 @@ pub fn load_on_selection(app: &mut XdawApp, payload: BrowserItem) {
 
 pub fn add_device(app: &mut XdawApp, r: TrackRef, kind: DeviceKind) {
     let t = app.project.track(r);
-    if kind.is_instrument() && t.kind != TrackKind::Midi {
+    if kind.needs_midi_track() && t.kind != TrackKind::Midi {
         app.status_line = format!("{} needs a MIDI track", kind.name());
         return;
     }
@@ -242,8 +239,8 @@ fn apply_preset(app: &mut XdawApp, r: TrackRef, kind: DeviceKind, name: &str, va
     let idx = match track.devices.iter().position(|d| d.kind == kind) {
         Some(i) => i,
         None => {
-            if kind.is_instrument() && track.kind != TrackKind::Midi {
-                app.status_line = "Instrument presets need a MIDI track".into();
+            if kind.needs_midi_track() && track.kind != TrackKind::Midi {
+                app.status_line = format!("{} presets need a MIDI track", kind.name());
                 return;
             }
             let id = app.project.add_device(r, kind);

@@ -73,7 +73,8 @@ pub fn render_offline(
         return Err(ExportError::SampleRate(settings.sample_rate));
     }
     let sr = settings.sample_rate as f64;
-    let graph = build_graph(project, media, sr)?;
+    let mut graph = build_graph(project, media, sr)?;
+    let graph_latency = graph.update_pdc();
     let bpm = project.transport.bpm;
     let (mut handle, mut renderer, _) = create(graph, bpm, false);
     renderer.include_metronome = false;
@@ -81,7 +82,10 @@ pub fn render_offline(
     handle.send(Command::SetGlobalQuantize(project.transport.global_quantize));
     handle.send(Command::Locate(settings.start));
     handle.send(Command::Play);
-    let body = ((settings.end - settings.start) * 60.0 / bpm * sr).round() as usize;
+    // Device latency delays the whole mix; render that much longer and drop the
+    // start so the file lines up with the timeline.
+    let latency = graph_latency;
+    let body = ((settings.end - settings.start) * 60.0 / bpm * sr).round() as usize + latency;
     let tail = (settings.tail_seconds.max(0.0) * sr).round() as usize;
     let mut l = vec![0.0f32; body + tail];
     let mut r = vec![0.0f32; body + tail];
@@ -100,6 +104,8 @@ pub fn render_offline(
         pos += n;
     }
     let nonfinite = handle.status.nonfinite_blocks.load(std::sync::atomic::Ordering::Relaxed);
+    l.drain(..latency);
+    r.drain(..latency);
     Ok((l, r, nonfinite))
 }
 

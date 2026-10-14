@@ -61,7 +61,7 @@ mod tests {
 
     #[test]
     fn every_preset_uses_known_in_range_params() {
-        for kind in DeviceKind::ALL {
+        for &kind in DeviceKind::ALL {
             for p in factory_presets(kind) {
                 for (id, v) in p.params {
                     let d = kind.params().iter().find(|d| d.id == *id).unwrap_or_else(|| panic!("{:?}/{}: unknown param {id}", kind, p.name));
@@ -73,7 +73,7 @@ mod tests {
 
     #[test]
     fn names_are_unique_per_kind() {
-        for kind in DeviceKind::ALL {
+        for &kind in DeviceKind::ALL {
             let mut n: Vec<_> = factory_presets(kind).iter().map(|p| p.name).collect();
             n.sort();
             n.dedup();

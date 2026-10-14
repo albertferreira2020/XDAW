@@ -566,7 +566,7 @@ impl DrumKit {
 mod tests {
     use super::*;
 
-    const CTX: Ctx = Ctx { sample_rate: 48_000.0, bpm: 120.0 };
+    const CTX: Ctx = Ctx::stopped(48_000.0, 120.0);
 
     fn on(offset: u32, pitch: u8) -> NoteEvent {
         NoteEvent { offset, kind: NoteKind::On { pitch, velocity: 100 } }

@@ -93,7 +93,7 @@ Platform: macOS 26.6.2, Apple M5, built-in output at 48 kHz. Windows/Linux: **no
 | Sends (post-fader) and return tracks | L10 §15 | Verified | same |
 | Group tracks (one level; group bus with devices/mixer/sends; group slots launch members; solo through group) | L10 §15.3 | Verified (engine); UI unverified | `group_tracks_sum_members_through_their_mixer`; nesting and folding are not implemented |
 | Feedback-free routing | prompt | Verified by construction | returns cannot send; `Project::validate` |
-| Latency compensation | prompt | Not needed yet | all built-in devices are zero-latency |
+| Device latency compensation (tracks and groups aligned to the slowest path; export trimmed) | Own (spec D3.3) | Verified (engine render tests; mutation-checked) | `lookahead_latency_is_compensated_across_tracks_and_in_the_export`, `group_latency_counts_for_its_members`; return-track latency not compensated |
 | Poly synth (2 PolyBLEP osc, SVF, 2 ADSR, 16 voices) | Own | Verified | voice stealing, sustain, release tests |
 | Sampler (Hermite interpolation, ADSR, root key) | Own | Verified | `sampler_plays_at_root_rate_and_octave_up` |
 | Drum Kit (16 pads, C1–D#2) | Own | Verified | `drum_pad_maps_note_to_pad` |
@@ -114,7 +114,18 @@ Platform: macOS 26.6.2, Apple M5, built-in output at 48 kHz. Windows/Linux: **no
 | Slice to New MIDI Track (grid or transients → Drum Kit pads + MIDI clip) | L10 §8 | Verified (detector tests, scripted UI creates track/pads/clip); playback fidelity of the sliced rack is not null-tested | `slicing::tests` |
 | Limiter (gain, ceiling, release; zero latency, brickwall) | Own | Verified (signal + export tests) | output never above ceiling, quiet audio untouched, release recovers, master export peak held at -1 dB |
 | Factory presets for Utility, EQ Three-Band, Limiter | Own | Verified (data/engine tests); UI menu not exercised by script | ids/ranges valid, applied via device `Presets` menu and Browser > Presets (drag or double-click) |
-| Device order, bypass, presets (JSON, id-keyed) | prompt | Implemented, unverified (UI) | |
+| Device sections (MIDI effects → instrument → audio effects), bypass, presets (JSON, id-keyed) | Own (spec D1) | Verified (model + engine + scripted UI insertion order) | `arpeggiator_in_front_of_an_instrument_plays_sixteenths_on_the_grid`, `midi_effects_and_instruments_are_rejected_on_audio_tracks`; script `adddevice` |
+| Parametric EQ (8 bands, 8 types incl. 12/24 dB cuts, response curve) | Own (spec D2) | Verified (signal tests: transparent when off, bell gain = curve, slopes 12/24 dB/oct, −3 dB corner); curve seen in screenshot | `tone::tests` |
+| Saturator (Soft, Hard, Warm, Fold; DC blocker) | Own (spec D2) | Verified (bounded curves, dry mix identity, no DC) | `tone::tests`; audible character not judged |
+| Motion Filter (LFO free/synced, 5 shapes, stereo phase, envelope follower) | Own (spec D2) | Verified (cutoff mapping, synced phase follows song position, stability) | `modulation::tests` |
+| Chorus, Phaser | Own (spec D2) | Verified (delay timing, all-pass energy, stability, dry mix) | `modulation::tests` |
+| Bus Compressor (stepped ratio/attack/release, Auto release, parallel mix, soft clip) | Own (spec D2) | Verified (steady-state reduction, soft clip bound, auto release law, sidechain) | `dynamics::tests` |
+| Gate (threshold, return hysteresis, hold, floor) | Own (spec D2) | Verified (hold timing, closes to floor) | `dynamics::tests` |
+| Multiband Compressor (3 bands, LR4 crossovers) | Own (spec D2) | Verified (bands sum flat ±0.1 dB from 40 Hz to 15 kHz, only the loud band compresses) | `dynamics::tests` |
+| Sidechain for Compressor, Bus Compressor, Gate (source = another audio/MIDI track, same block, cycles fall back to self) | Own (spec D3.1) | Verified (engine render tests; mutation-checked) | `sidechain_ducks_the_listener_in_the_same_block_whatever_the_track_order`, `sidechain_cycles_fall_back_to_self_instead_of_failing`; chooser seen in screenshot |
+| Limiter lookahead (1.5/3/6 ms, linear ramp, reports latency) | Own (spec D3.2) | Verified (exact delay, no overshoot, ramp before the peak) | `lookahead_delays_quiet_audio_and_ramps_into_peaks_without_overshoot` |
+| MIDI effects: Arpeggiator, Chord Stack, Scale Lock, Note Duration, Pitch Randomizer, Velocity Shaper | Own (spec D4) | Verified (unit tests incl. no stuck notes on release/parameter change/AllOff; engine arpeggio timing) | `midi_fx::tests`; live keyboard input not exercised |
+| FM Synth (4 operators, 8 algorithms, feedback) and Morph Synth (4 generated tables, mip-mapped, unison) | Own (spec D5) | Verified (pitch, release, all algorithms finite, table normalisation and band limit) | `synths::tests`; timbre not judged by ear |
 | Parameter smoothing | prompt | Verified | `smoothing_reaches_target_and_bounds_step` |
 | Racks with macros | L10 | Partial (macros only) | `macros_drive_mapped_parameters_in_normalised_space` |
 
